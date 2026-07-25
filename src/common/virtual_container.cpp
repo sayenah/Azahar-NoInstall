@@ -143,14 +143,13 @@ std::mutex extraction_mutex;
 // it into the cache directory if a valid copy is not already present. The
 // cache key is derived from the entry's CRC32, size and name, so a changed
 // zip invalidates naturally.
-std::optional<std::string> GetOrExtractEntry(ZipReader& zip,
-                                             const mz_zip_archive_file_stat& stat) {
+std::optional<std::string> GetOrExtractEntry(ZipReader& zip, const mz_zip_archive_file_stat& stat) {
     std::string safe_name = stat.m_filename;
     std::ranges::replace_if(
         safe_name, [](char c) { return c == '/' || c == '\\' || c == ':'; }, '_');
     const std::string cache_dir = GetExtractionCacheDir();
-    const std::string cache_path = fmt::format("{}{:08x}_{:x}_{}", cache_dir, stat.m_crc32,
-                                               stat.m_uncomp_size, safe_name);
+    const std::string cache_path =
+        fmt::format("{}{:08x}_{:x}_{}", cache_dir, stat.m_crc32, stat.m_uncomp_size, safe_name);
 
     std::scoped_lock lock{extraction_mutex};
     if (Exists(cache_path) && GetSize(cache_path) == stat.m_uncomp_size) {
@@ -229,8 +228,8 @@ std::optional<VirtualRange> ResolveVirtualPath(const std::string& path) {
             return std::nullopt;
         }
         if (stat->m_method == 0) {
-            const auto data_offset = GetStoredEntryDataOffset(range.host_path,
-                                                              stat->m_local_header_ofs);
+            const auto data_offset =
+                GetStoredEntryDataOffset(range.host_path, stat->m_local_header_ofs);
             if (!data_offset) {
                 return std::nullopt;
             }

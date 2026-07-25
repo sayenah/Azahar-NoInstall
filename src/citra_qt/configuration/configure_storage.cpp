@@ -51,6 +51,33 @@ ConfigureStorage::ConfigureStorage(bool is_powered_on_, QWidget* parent)
         ui->change_sdmc_dir->setEnabled(true);
     });
 
+    const auto connect_content_folder = [this](QPushButton* change_button,
+                                               QPushButton* clear_button, QLineEdit* path_edit,
+                                               Settings::Setting<std::string>& setting,
+                                               const QString& caption) {
+        connect(change_button, &QPushButton::clicked, this, [this, path_edit, caption, &setting]() {
+            const QString dir_path = QFileDialog::getExistingDirectory(
+                this, caption, QString::fromStdString(setting.GetValue()),
+                QFileDialog::ShowDirsOnly);
+            if (!dir_path.isEmpty()) {
+                setting = dir_path.toStdString();
+                path_edit->setText(dir_path);
+            }
+        });
+        connect(clear_button, &QPushButton::clicked, this, [path_edit, &setting]() {
+            setting = std::string{};
+            path_edit->clear();
+        });
+    };
+    connect_content_folder(ui->change_updates_folder, ui->clear_updates_folder,
+                           ui->updates_folder_path, Settings::values.updates_folder,
+                           tr("Select Updates Folder"));
+    connect_content_folder(ui->change_dlc_folder, ui->clear_dlc_folder, ui->dlc_folder_path,
+                           Settings::values.dlc_folder, tr("Select DLC Folder"));
+    connect_content_folder(ui->change_dsiware_folder, ui->clear_dsiware_folder,
+                           ui->dsiware_folder_path, Settings::values.dsiware_folder,
+                           tr("Select DSiWare Folder"));
+
     connect(ui->toggle_virtual_sd, &QCheckBox::clicked, this, [this]() {
         ApplyConfiguration();
         SetConfiguration();
@@ -74,6 +101,12 @@ void ConfigureStorage::SetConfiguration() {
     QString sdmc_path = QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir));
     ui->sdmc_dir_path->setText(sdmc_path);
     ui->open_sdmc_dir->setEnabled(!sdmc_path.isEmpty());
+
+    ui->updates_folder_path->setText(
+        QString::fromStdString(Settings::values.updates_folder.GetValue()));
+    ui->dlc_folder_path->setText(QString::fromStdString(Settings::values.dlc_folder.GetValue()));
+    ui->dsiware_folder_path->setText(
+        QString::fromStdString(Settings::values.dsiware_folder.GetValue()));
 
     ui->toggle_virtual_sd->setChecked(Settings::values.use_virtual_sd.GetValue());
     ui->toggle_custom_storage->setChecked(Settings::values.use_custom_storage.GetValue());
