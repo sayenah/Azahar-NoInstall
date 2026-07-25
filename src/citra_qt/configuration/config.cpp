@@ -496,6 +496,9 @@ void QtConfig::ReadDataStorageValues() {
     ReadBasicSetting(Settings::values.use_custom_storage);
     ReadBasicSetting(Settings::values.compress_cia_installs);
     ReadBasicSetting(Settings::values.async_fs_operations);
+    ReadBasicSetting(Settings::values.updates_folder);
+    ReadBasicSetting(Settings::values.dlc_folder);
+    ReadBasicSetting(Settings::values.dsiware_folder);
 
     const std::string nand_dir =
         ReadSetting(Settings::QKeys::nand_directory, QStringLiteral("")).toString().toStdString();
@@ -1093,6 +1096,9 @@ void QtConfig::SaveDataStorageValues() {
     WriteBasicSetting(Settings::values.use_custom_storage);
     WriteBasicSetting(Settings::values.compress_cia_installs);
     WriteBasicSetting(Settings::values.async_fs_operations);
+    WriteBasicSetting(Settings::values.updates_folder);
+    WriteBasicSetting(Settings::values.dlc_folder);
+    WriteBasicSetting(Settings::values.dsiware_folder);
     WriteSetting(Settings::QKeys::nand_directory,
                  QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::NANDDir)),
                  QStringLiteral(""));

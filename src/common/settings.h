@@ -497,6 +497,11 @@ struct Values {
     Setting<bool> use_custom_storage{false, Keys::use_custom_storage};
     Setting<bool> compress_cia_installs{false, Keys::compress_cia_installs};
     Setting<bool> async_fs_operations{true, Keys::async_fs_operations};
+    // No-install content folders: update/DLC/DSiWare CIAs (or zips containing
+    // them) placed here are served in place instead of being installed.
+    Setting<std::string> updates_folder{"", Keys::updates_folder};
+    Setting<std::string> dlc_folder{"", Keys::dlc_folder};
+    Setting<std::string> dsiware_folder{"", Keys::dsiware_folder};
 
     // System
     SwitchableSetting<s32> region_value{REGION_VALUE_AUTO_SELECT, Keys::region_value};
