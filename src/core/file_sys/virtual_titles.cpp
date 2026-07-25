@@ -16,6 +16,7 @@
 #include "core/file_sys/cia_container.h"
 #include "core/file_sys/title_metadata.h"
 #include "core/file_sys/virtual_titles.h"
+#include "core/hle/service/am/am.h"
 #include "core/loader/loader.h"
 
 namespace FileSys::VirtualTitles {
@@ -32,6 +33,9 @@ struct Entry {
     std::string cia_path; // plain or virtual (zip entry) path of the CIA
     std::unique_ptr<CIAContainer> container;
     u16 version = 0;
+    // Loadable path per content index, resolved lazily: a virtual byte-range for
+    // plaintext content, or a decrypted cache file for encrypted content.
+    std::map<std::size_t, std::string> resolved_content_paths;
 };
 
 std::mutex registry_mutex;
@@ -111,16 +115,8 @@ u64 TryRegister(const Candidate& candidate, TitleIdPredicate&& wanted) {
         return 0;
     }
 
-    for (std::size_t i = 0; i < tmd.GetContentCount(); ++i) {
-        if (container->GetHeader()->IsContentPresent(i) &&
-            (tmd.GetContentTypeByIndex(i) & TMDContentTypeFlag::Encrypted)) {
-            LOG_WARNING(Service_AM,
-                        "{} matches title {:016x} but has encrypted content and cannot be served "
-                        "in place; decrypt it first",
-                        candidate.cia_path, title_id);
-            return 0;
-        }
-    }
+    // Encrypted content is no longer rejected here; it is decrypted on demand in
+    // GetContentPath when the console keys are available (see PrepareCIAContentForLoad).
 
     const u16 version = tmd.GetTitleVersion();
     std::scoped_lock lock{registry_mutex};
@@ -303,13 +299,24 @@ std::optional<std::string> GetContentPath(u64 title_id, std::size_t index) {
     if (it == registry.end()) {
         return std::nullopt;
     }
-    const auto& entry = it->second;
+    auto& entry = it->second;
     if (index >= entry.container->GetTitleMetadata().GetContentCount() ||
         !entry.container->GetHeader()->IsContentPresent(index)) {
         return std::nullopt;
     }
-    return FileUtil::MakeVirtualRangePath(entry.cia_path, entry.container->GetContentOffset(index),
-                                          entry.container->GetContentSize(index));
+
+    // Resolve once per content: plaintext content maps to a virtual byte-range;
+    // encrypted content is decrypted into the transient cache on first access.
+    const auto cached = entry.resolved_content_paths.find(index);
+    if (cached != entry.resolved_content_paths.end()) {
+        return cached->second;
+    }
+    auto resolved = Service::AM::PrepareCIAContentForLoad(entry.cia_path, index);
+    if (!resolved) {
+        return std::nullopt;
+    }
+    entry.resolved_content_paths.emplace(index, *resolved);
+    return resolved;
 }
 
 } // namespace FileSys::VirtualTitles

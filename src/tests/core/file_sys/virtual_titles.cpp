@@ -188,13 +188,17 @@ TEST_CASE("VirtualTitles companion scan", "[core][file_sys]") {
         REQUIRE_FALSE(FileSys::VirtualTitles::HasTitle(0x0004000E11111111ULL));
     }
 
-    SECTION("encrypted content is rejected") {
+    SECTION("encrypted content is registered (decrypted on demand)") {
+        // Encrypted content is no longer rejected at registration; it is
+        // decrypted lazily when its content path is requested, given keys.
+        // (Real decryption needs real keys + real NCCH, so this only checks
+        // that a title flagged encrypted is registered rather than skipped.)
         WriteFile(fixture.updates_dir + "MyGame (USA) (Update).cia",
                   BuildTestCia(UPDATE_TID, 3, MakeContent(0x100, 0x55),
                                FileSys::TMDContentTypeFlag::Encrypted));
 
         FileSys::VirtualTitles::ScanForCompanionTitles(BASE_TID, game_path);
-        REQUIRE_FALSE(FileSys::VirtualTitles::HasTitle(UPDATE_TID));
+        REQUIRE(FileSys::VirtualTitles::HasTitle(UPDATE_TID));
     }
 
     SECTION("highest version wins") {
