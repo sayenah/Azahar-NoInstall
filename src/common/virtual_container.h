@@ -45,6 +45,12 @@ struct ZipEntryInfo {
 /// Returns std::nullopt if the file is not a readable zip archive.
 std::optional<std::vector<ZipEntryInfo>> ListZipContents(const std::string& zip_path);
 
+/// Reads up to max_bytes from the start of a zip entry by streaming, without
+/// extracting the entry to the cache. Returns std::nullopt on failure.
+std::optional<std::vector<u8>> ReadZipEntryPrefix(const std::string& zip_path,
+                                                  const std::string& entry_name,
+                                                  std::size_t max_bytes);
+
 /// Builds a virtual path from a container path and an inner segment.
 std::string MakeVirtualPath(const std::string& container, const std::string& entry);
 

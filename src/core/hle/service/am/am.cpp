@@ -25,6 +25,7 @@
 #include "core/file_sys/otp.h"
 #include "core/file_sys/seed_db.h"
 #include "core/file_sys/title_metadata.h"
+#include "core/file_sys/virtual_titles.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/errors.h"
@@ -1238,6 +1239,12 @@ std::string GetTicketPath(u64 title_id, u64 ticket_id) {
 }
 
 std::string GetTitleMetadataPath(Service::FS::MediaType media_type, u64 tid, bool update) {
+    // Titles served in place from CIA files (no-install) have exactly one TMD,
+    // inside the CIA itself.
+    if (const auto virtual_tmd = FileSys::VirtualTitles::GetMetadataPath(tid)) {
+        return *virtual_tmd;
+    }
+
     std::string content_path = GetTitlePath(media_type, tid) + "content/";
 
     if (media_type == Service::FS::MediaType::GameCard) {
@@ -1277,6 +1284,10 @@ std::string GetTitleMetadataPath(Service::FS::MediaType media_type, u64 tid, boo
 
 std::string GetTitleContentPath(Service::FS::MediaType media_type, u64 tid, std::size_t index,
                                 bool update) {
+
+    if (const auto virtual_content = FileSys::VirtualTitles::GetContentPath(tid, index)) {
+        return *virtual_content;
+    }
 
     if (media_type == Service::FS::MediaType::GameCard) {
         // TODO(B3N30): check if TID matches
