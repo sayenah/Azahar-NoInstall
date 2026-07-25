@@ -273,6 +273,44 @@ std::optional<std::vector<ZipEntryInfo>> ListZipContents(const std::string& zip_
     return entries;
 }
 
+std::optional<std::vector<u8>> ReadZipEntryPrefix(const std::string& zip_path,
+                                                  const std::string& entry_name,
+                                                  std::size_t max_bytes) {
+    ZipReader zip(zip_path);
+    if (!zip.IsOpen()) {
+        return std::nullopt;
+    }
+    const auto stat = zip.FindEntry(entry_name);
+    if (!stat) {
+        return std::nullopt;
+    }
+    const std::size_t to_read =
+        std::min<std::size_t>(max_bytes, static_cast<std::size_t>(stat->m_uncomp_size));
+    std::vector<u8> buffer(to_read);
+    if (to_read == 0) {
+        return buffer;
+    }
+    mz_zip_reader_extract_iter_state* iter =
+        mz_zip_reader_extract_iter_new(&zip.archive, stat->m_file_index, 0);
+    if (!iter) {
+        return std::nullopt;
+    }
+    std::size_t read = 0;
+    while (read < to_read) {
+        const std::size_t chunk =
+            mz_zip_reader_extract_iter_read(iter, buffer.data() + read, to_read - read);
+        if (chunk == 0) {
+            break;
+        }
+        read += chunk;
+    }
+    mz_zip_reader_extract_iter_free(iter);
+    if (read != to_read) {
+        return std::nullopt;
+    }
+    return buffer;
+}
+
 std::string MakeVirtualPath(const std::string& container, const std::string& entry) {
     return container + VIRTUAL_SEP + entry;
 }
