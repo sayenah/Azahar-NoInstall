@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 #include "common/common_types.h"
 
 namespace FileSys::VirtualTitles {
@@ -30,6 +31,9 @@ void ScanForCompanionTitles(u64 base_title_id, const std::string& base_game_path
 
 /// True if the given title is currently served virtually.
 bool HasTitle(u64 title_id);
+
+/// Title IDs of every currently registered virtual title.
+std::vector<u64> GetAllTitleIds();
 
 /// Path (usually virtual, see virtual_container.h) of the title's TMD.
 std::optional<std::string> GetMetadataPath(u64 title_id);
