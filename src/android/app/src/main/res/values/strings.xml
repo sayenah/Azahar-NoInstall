@@ -33,6 +33,15 @@
     <string name="citra_description">An open-source 3DS emulator</string>
     <string name="about_description">Build version, credits, and more</string>
     <string name="games_dir_selected">Application directory selected</string>
+    <string name="select_updates_folder">Select Updates Folder</string>
+    <string name="select_updates_folder_description">Update CIAs (or zips of them) here are used directly, without installing</string>
+    <string name="updates_dir_selected">Updates folder selected</string>
+    <string name="select_dlc_folder">Select DLC Folder</string>
+    <string name="select_dlc_folder_description">DLC CIAs (or zips of them) here are used directly, without installing</string>
+    <string name="dlc_dir_selected">DLC folder selected</string>
+    <string name="select_dsiware_folder">Select DSiWare Folder</string>
+    <string name="select_dsiware_folder_description">DSiWare CIAs (or zips of them) here are listed directly, without installing</string>
+    <string name="dsiware_dir_selected">DSiWare folder selected</string>
     <string name="select_citra_user_folder_home_description">Changes the files that Azahar uses to load applications</string>
     <string name="theme_and_color_description">Modify the look of the app</string>
     <string name="install_cia_title">Install CIA</string>
