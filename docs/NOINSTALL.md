@@ -40,10 +40,15 @@ Decryption is a cross-cutting concern used by layers 2 and 3.
 
 | Branch / tag | Purpose |
 |---|---|
-| `master` | Tracks upstream `azahar-emu/azahar` master. Also holds `.github/workflows/noinstall-autosync.yml`. **Do not put feature code here.** |
-| `noinstall/core` | The feature branch. All NoInstall commits live here, based on `master`. This is the source of truth. |
-| `noinstall/<tag>` | A backport of the feature onto a specific upstream release tag (e.g. `noinstall/2125.1.3`). Produced by the autosync workflow (cherry-pick) or by hand when conflicts need resolving. |
+| `noinstall/core` | **The default branch** and source of truth. All NoInstall commits live here, based on the fork point of `master`. Also carries the autosync workflow (GitHub reads scheduled workflows from the default branch). This is what visitors and clones get, and what the front-page README comes from. |
+| `master` | The upstream-anchor. Shares history with `noinstall/core` at the fork point so the autosync can compute `merge-base(master, noinstall/core)` to isolate the feature commits. It does **not** need to advance to newer upstream (the autosync fetches upstream tags directly). Don't put feature code here. |
+| `noinstall/<tag>` | A backport of the feature onto a specific upstream release tag (e.g. `noinstall/2125.1.3`). Produced by the autosync workflow (cherry-pick) or by hand when conflicts need resolving. The autosync workflow file is cherry-picked onto these too but is inert there (no `push` trigger). |
 | `<tag>-noinstall` (tag) | Marks a published release built from `noinstall/<tag>`. |
+
+> **Front page / README.** GitHub renders the README from the **default branch**
+> (`noinstall/core`). If you ever change the default branch, the front page and
+> the scheduled-workflow source move with it — keep the autosync workflow on
+> whatever branch is default.
 
 The **autosync workflow** (`.github/workflows/noinstall-autosync.yml`, runs daily
 + on demand) watches upstream for the newest stable release and newest newer RC.
@@ -243,6 +248,14 @@ Windows build even when macOS/Linux pass.
 - **Workflow `startup_failure` with no jobs** is a transient GitHub issue
   (often from re-dispatching while a cancelled run tears down). Just re-dispatch;
   nothing is published on a startup failure.
+- **Publish must not download artifacts into `dist/`.** The repo already has a
+  top-level `dist/` directory (packaging files, incl. `dist/apple/`), so
+  downloading into it and uploading `dist/*` attaches packaging folders and
+  fails ("is a directory"). The workflow downloads into `release-artifacts/` and
+  uploads only `*.zip`/`*.apk`/`*.aab`. If a publish fails after the build
+  succeeded, you can publish by hand from the run's artifacts:
+  `gh run download <run-id> -n release-macos -n release-windows -n release-android`
+  then `gh release create <tag>-noinstall --target noinstall/<tag> <files...>`.
 
 ---
 
