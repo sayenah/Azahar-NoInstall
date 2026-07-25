@@ -242,24 +242,27 @@ static std::unique_ptr<AppLoader> GetCIADirectLoader(Core::System& system,
                   filepath, title_id);
         return nullptr;
     }
-    if (tmd.GetContentTypeByIndex(FileSys::TMDContentIndex::Main) &
-        FileSys::TMDContentTypeFlag::Encrypted) {
-        LOG_ERROR(Loader, "CIA {} has encrypted content and cannot be booted", filepath);
+    file.Close();
+
+    // Resolve the main content to a loadable path: a virtual range for
+    // already-plaintext content, or a decrypted cache file for encrypted
+    // content (when the console keys are available).
+    const auto ncch_path =
+        Service::AM::PrepareCIAContentForLoad(filepath, FileSys::TMDContentIndex::Main);
+    if (!ncch_path) {
+        LOG_ERROR(Loader,
+                  "CIA {} could not be prepared for direct boot; if it is encrypted, ensure the "
+                  "console keys (keys.txt) are present",
+                  filepath);
         return nullptr;
     }
 
-    const u64 content_offset = container.GetContentOffset(FileSys::TMDContentIndex::Main);
-    const u64 content_size = tmd.GetContentSizeByIndex(FileSys::TMDContentIndex::Main);
-    const std::string ncch_path =
-        FileUtil::MakeVirtualRangePath(filepath, content_offset, content_size);
-
-    FileUtil::IOFile ncch_file(ncch_path, "rb");
+    FileUtil::IOFile ncch_file(*ncch_path, "rb");
     if (!ncch_file.IsOpen()) {
         return nullptr;
     }
-    LOG_INFO(Loader, "Booting CIA {} directly (content at 0x{:x}, size 0x{:x})", filepath,
-             content_offset, content_size);
-    return std::make_unique<AppLoader_NCCH>(system, std::move(ncch_file), ncch_path);
+    LOG_INFO(Loader, "Booting CIA {} directly", filepath);
+    return std::make_unique<AppLoader_NCCH>(system, std::move(ncch_file), *ncch_path);
 }
 
 std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
@@ -308,6 +311,23 @@ std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
     if (type == FileType::CIA) {
         file.Close();
         return GetCIADirectLoader(system, load_path);
+    }
+
+    // An encrypted NCCH/NCSD ROM (.cxi/.cci/.3ds) is decrypted in place to the
+    // transient cache when the console keys are available, then loaded from
+    // there; plaintext ROMs load unchanged.
+    if (type == FileType::CXI || type == FileType::CCI) {
+        file.Close();
+        if (const auto decrypted = Service::AM::PrepareEncryptedRomForLoad(load_path)) {
+            LOG_INFO(Loader, "Booting encrypted ROM {} via decrypted cache", load_path);
+            load_path = *decrypted;
+        }
+        FileUtil::IOFile reopened(load_path, "rb");
+        if (!reopened.IsOpen()) {
+            LOG_ERROR(Loader, "Failed to load file {}", load_path);
+            return nullptr;
+        }
+        return GetFileLoader(system, std::move(reopened), type, filename_filename, load_path);
     }
 
     return GetFileLoader(system, std::move(file), type, filename_filename, load_path);

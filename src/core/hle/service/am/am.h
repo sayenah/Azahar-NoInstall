@@ -131,6 +131,12 @@ public:
         return is_error;
     }
 
+    // Permits decryption of encrypted NCCH content. Used by the no-install flow
+    // to decrypt user-supplied content in place; see DecryptNCCHPartitionToCache.
+    void AuthorizeDecryption() {
+        decryption_authorized = true;
+    }
+
 private:
     friend class CIAFile;
     std::unique_ptr<FileUtil::IOFile> file;
@@ -389,6 +395,55 @@ InstallStatus CheckCIAToInstall(const std::string& path, bool& is_compressed,
  * Get CIA metadata information from file.
  */
 ResultVal<std::pair<TitleInfo, std::unique_ptr<Loader::SMDH>>> GetCIAInfos(const std::string& path);
+
+/**
+ * Decrypts a single NCCH partition into a transient cache file, reusing the
+ * install-time NCCH decryptor. This is the no-install counterpart to
+ * installing an encrypted title: instead of writing decrypted content into the
+ * emulated NAND/SD, it produces a decrypted copy in the cache directory (wiped
+ * on exit) that NCCHContainer can load in place.
+ *
+ * @param source_path Path of the file holding the encrypted NCCH (may be a
+ *                    virtual container path, e.g. a CIA inside a zip).
+ * @param offset      Byte offset of the NCCH header within source_path.
+ * @param size        Size of the NCCH partition in bytes.
+ * @param title_key   For CIA content, the decrypted title key used to strip the
+ *                    outer AES-CBC layer; std::nullopt for bare NCCH (e.g. CCI).
+ * @param content_ctr AES-CBC IV for the title-key layer (TMD content CTR).
+ * @param cache_id    Stable file name for the cached result (enables reuse).
+ * @returns Path of the decrypted cache file, or std::nullopt if the required
+ *          console keys/seed are unavailable or decryption failed.
+ */
+std::optional<std::string> DecryptNCCHPartitionToCache(
+    const std::string& source_path, u64 offset, u64 size,
+    const std::optional<std::array<u8, 16>>& title_key, const std::array<u8, 16>& content_ctr,
+    const std::string& cache_id);
+
+/**
+ * Resolves a CIA's content to a path NCCHContainer can load in place, for the
+ * no-install flow. Already-plaintext content resolves to a virtual byte-range
+ * of the CIA; encrypted content (outer CIA title-key layer and/or inner NCCH
+ * crypto) is decrypted once into the transient cache and that path is returned.
+ *
+ * @param cia_path      Path of the CIA (may be a virtual container path).
+ * @param content_index Index of the content within the CIA/TMD.
+ * @returns A loadable path, or std::nullopt if the content is missing, or is
+ *          encrypted but the required console keys are unavailable.
+ */
+std::optional<std::string> PrepareCIAContentForLoad(const std::string& cia_path,
+                                                    std::size_t content_index);
+
+/**
+ * Resolves a directly-booted NCCH/NCSD ROM (.cxi/.cci/.3ds) for the no-install
+ * flow. If the ROM's main partition is encrypted, it is decrypted into the
+ * transient cache and that path is returned; if it is already plaintext,
+ * std::nullopt is returned so the caller loads the original file unchanged.
+ *
+ * @param path Path of the ROM (may be a virtual container path).
+ * @returns Path of a decrypted cache file, std::nullopt if no decryption was
+ *          needed, or std::nullopt with a logged error if keys are missing.
+ */
+std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path);
 
 /**
  * Get the update title ID for a title

@@ -16,6 +16,7 @@
 #include "common/hacks/hack_manager.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
+#include "common/virtual_container.h"
 #include "common/zstd_compression.h"
 #include "core/core.h"
 #include "core/file_sys/certificate.h"
@@ -406,6 +407,195 @@ void NCCHCryptoFile::Write(const u8* buffer, std::size_t length) {
             }
         }
     }
+}
+
+std::optional<std::string> DecryptNCCHPartitionToCache(
+    const std::string& source_path, u64 offset, u64 size,
+    const std::optional<std::array<u8, 16>>& title_key, const std::array<u8, 16>& content_ctr,
+    const std::string& cache_id) {
+
+    FileUtil::IOFile source(source_path, "rb");
+    if (!source.IsOpen()) {
+        LOG_ERROR(Service_AM, "Failed to open {} for in-place decryption", source_path);
+        return std::nullopt;
+    }
+
+    const std::string cache_dir = FileUtil::GetUserPath(FileUtil::UserPath::CacheDir) +
+                                  "extracted" DIR_SEP "decrypted" DIR_SEP;
+    const std::string dest_path = cache_dir + cache_id;
+    // A decrypted copy from earlier this session is reused as-is.
+    if (FileUtil::Exists(dest_path) && FileUtil::GetSize(dest_path) > 0) {
+        return dest_path;
+    }
+    if (!FileUtil::CreateFullPath(cache_dir)) {
+        LOG_ERROR(Service_AM, "Failed to create decryption cache dir {}", cache_dir);
+        return std::nullopt;
+    }
+    const std::string tmp_path = dest_path + ".tmp";
+
+    bool ok = true;
+    {
+        // The decrypted copy is stored with console-unique crypto, like installed
+        // content, so it is not a shareable plaintext dump and NCCHContainer reads
+        // it back transparently.
+        NCCHCryptoFile crypto_file(tmp_path, /*encrypted_content=*/true);
+        crypto_file.AuthorizeDecryption();
+
+        std::optional<CryptoPP::CBC_Mode<CryptoPP::AES>::Decryption> title_key_cbc;
+        if (title_key) {
+            title_key_cbc.emplace();
+            title_key_cbc->SetKeyWithIV(title_key->data(), title_key->size(), content_ctr.data());
+        }
+
+        // 0x10000 is a multiple of the AES block and NCCH media unit, so every
+        // chunk stays block-aligned for the CBC title-key layer.
+        constexpr std::size_t CHUNK_SIZE = 0x10000;
+        std::vector<u8> buffer(CHUNK_SIZE);
+        u64 remaining = size;
+        source.Seek(offset, SEEK_SET);
+        while (remaining > 0) {
+            const std::size_t to_read =
+                static_cast<std::size_t>(std::min<u64>(CHUNK_SIZE, remaining));
+            if (source.ReadBytes(buffer.data(), to_read) != to_read) {
+                LOG_ERROR(Service_AM, "Short read decrypting {}", source_path);
+                ok = false;
+                break;
+            }
+            if (title_key_cbc) {
+                title_key_cbc->ProcessData(buffer.data(), buffer.data(), to_read);
+            }
+            crypto_file.Write(buffer.data(), to_read);
+            if (crypto_file.IsError()) {
+                ok = false;
+                break;
+            }
+            remaining -= to_read;
+        }
+    }
+
+    if (!ok) {
+        FileUtil::Delete(tmp_path);
+        return std::nullopt;
+    }
+    if (!FileUtil::Rename(tmp_path, dest_path)) {
+        FileUtil::Delete(tmp_path);
+        return std::nullopt;
+    }
+    LOG_INFO(Service_AM, "Decrypted {} (0x{:x} bytes) in place to cache", source_path, size);
+    return dest_path;
+}
+
+std::optional<std::string> PrepareCIAContentForLoad(const std::string& cia_path,
+                                                    std::size_t content_index) {
+    FileUtil::IOFile file(cia_path, "rb");
+    if (!file.IsOpen()) {
+        return std::nullopt;
+    }
+
+    // Parse only the header and TMD; the ticket is read lazily below, and only
+    // when content actually needs the title-key layer stripped. This keeps
+    // already-plaintext content cheap and does not require a ticket to exist.
+    FileSys::CIAContainer container;
+    std::vector<u8> header_buf(FileSys::CIA_HEADER_SIZE);
+    if (file.ReadAtBytes(header_buf.data(), header_buf.size(), 0) != header_buf.size() ||
+        container.LoadHeader(header_buf) != Loader::ResultStatus::Success) {
+        return std::nullopt;
+    }
+    std::vector<u8> tmd_buf(container.GetTitleMetadataSize());
+    if (file.ReadAtBytes(tmd_buf.data(), tmd_buf.size(), container.GetTitleMetadataOffset()) !=
+            tmd_buf.size() ||
+        container.LoadTitleMetadata(tmd_buf) != Loader::ResultStatus::Success) {
+        return std::nullopt;
+    }
+
+    const FileSys::TitleMetadata& tmd = container.GetTitleMetadata();
+    if (content_index >= tmd.GetContentCount() ||
+        !container.GetHeader()->IsContentPresent(content_index)) {
+        return std::nullopt;
+    }
+
+    const u64 content_offset = container.GetContentOffset(content_index);
+    const u64 content_size = container.GetContentSize(content_index);
+    const std::string cache_id =
+        fmt::format("{:016x}_{:04x}_{:x}.app", tmd.GetTitleID(), content_index, content_size);
+
+    // Outer CIA title-key (AES-CBC) layer, if the TMD marks this content encrypted.
+    if ((tmd.GetContentTypeByIndex(content_index) & FileSys::TMDContentTypeFlag::Encrypted) != 0) {
+        std::vector<u8> ticket_buf(container.GetTicketSize());
+        if (ticket_buf.empty() ||
+            file.ReadAtBytes(ticket_buf.data(), ticket_buf.size(), container.GetTicketOffset()) !=
+                ticket_buf.size() ||
+            container.LoadTicket(ticket_buf) != Loader::ResultStatus::Success) {
+            LOG_ERROR(Service_AM, "Encrypted CIA {} has no readable ticket", cia_path);
+            return std::nullopt;
+        }
+        auto title_key = container.GetTicket().GetTitleKey();
+        if (!title_key) {
+            LOG_ERROR(Service_AM,
+                      "Encrypted CIA {} requires a title key, but the console keys are "
+                      "unavailable (provide keys.txt)",
+                      cia_path);
+            return std::nullopt;
+        }
+        return DecryptNCCHPartitionToCache(cia_path, content_offset, content_size, title_key,
+                                           tmd.GetContentCTRByIndex(content_index), cache_id);
+    }
+
+    // No title-key layer: the content bytes are readable, so peek the NCCH header
+    // to decide whether inner NCCH crypto still needs stripping.
+    NCCH_Header ncch_header{};
+    file.Seek(content_offset, SEEK_SET);
+    if (file.ReadBytes(&ncch_header, sizeof(ncch_header)) != sizeof(ncch_header)) {
+        return std::nullopt;
+    }
+    const bool is_ncch = Loader::MakeMagic('N', 'C', 'C', 'H') == ncch_header.magic;
+    if (!is_ncch || ncch_header.no_crypto) {
+        // Already plaintext (or a non-NCCH SRL, e.g. DSiWare): serve in place.
+        return FileUtil::MakeVirtualRangePath(cia_path, content_offset, content_size);
+    }
+    return DecryptNCCHPartitionToCache(cia_path, content_offset, content_size, std::nullopt,
+                                       std::array<u8, 16>{}, cache_id);
+}
+
+std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path) {
+    constexpr u32 kBlockSize = 0x200;
+
+    FileUtil::IOFile file(path, "rb");
+    if (!file.IsOpen()) {
+        return std::nullopt;
+    }
+
+    // Locate the main NCCH partition: for an NCSD (CCI/3DS) it is partition 0;
+    // for a bare CXI it is the file itself.
+    u64 ncch_offset = 0;
+    u64 ncch_size = file.GetSize();
+    NCCH_Header header{};
+    if (file.ReadBytes(&header, sizeof(header)) != sizeof(header)) {
+        return std::nullopt;
+    }
+    if (Loader::MakeMagic('N', 'C', 'S', 'D') == header.magic) {
+        NCSD_Header ncsd{};
+        file.Seek(0, SEEK_SET);
+        if (file.ReadBytes(&ncsd, sizeof(ncsd)) != sizeof(ncsd)) {
+            return std::nullopt;
+        }
+        ncch_offset = static_cast<u64>(ncsd.partitions[0].offset) * kBlockSize;
+        ncch_size = static_cast<u64>(ncsd.partitions[0].size) * kBlockSize;
+        file.Seek(ncch_offset, SEEK_SET);
+        if (file.ReadBytes(&header, sizeof(header)) != sizeof(header)) {
+            return std::nullopt;
+        }
+    }
+
+    if (Loader::MakeMagic('N', 'C', 'C', 'H') != header.magic || header.no_crypto) {
+        // Not an encrypted NCCH: the caller should load the file unchanged.
+        return std::nullopt;
+    }
+
+    const std::string cache_id =
+        fmt::format("{:016x}_{:x}.cxi", static_cast<u64>(header.program_id), ncch_size);
+    return DecryptNCCHPartitionToCache(path, ncch_offset, ncch_size, std::nullopt,
+                                       std::array<u8, 16>{}, cache_id);
 }
 
 void AuthorizeCIAFileDecryption(CIAFile* cia_file, Kernel::HLERequestContext& ctx) {
