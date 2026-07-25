@@ -180,6 +180,102 @@
          </widget>
         </item>
         <item>
+         <widget class="QGroupBox" name="content_folders_group">
+          <property name="title">
+           <string>No-Install Content Folders</string>
+          </property>
+          <property name="toolTip">
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Update, DLC and DSiWare CIA files (or zip files containing them) placed in these folders are used directly when a matching game is started. Nothing is installed to the emulated console.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          </property>
+          <layout class="QGridLayout" name="content_folders_layout">
+           <item row="0" column="0">
+            <widget class="QLabel" name="updates_folder_label">
+             <property name="text">
+              <string>Updates Folder</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="updates_folder_path">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="2">
+            <widget class="QPushButton" name="change_updates_folder">
+             <property name="text">
+              <string>Change</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="3">
+            <widget class="QPushButton" name="clear_updates_folder">
+             <property name="text">
+              <string>Clear</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="dlc_folder_label">
+             <property name="text">
+              <string>DLC Folder</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QLineEdit" name="dlc_folder_path">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="2">
+            <widget class="QPushButton" name="change_dlc_folder">
+             <property name="text">
+              <string>Change</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="3">
+            <widget class="QPushButton" name="clear_dlc_folder">
+             <property name="text">
+              <string>Clear</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="dsiware_folder_label">
+             <property name="text">
+              <string>DSiWare Folder</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QLineEdit" name="dsiware_folder_path">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="2">
+            <widget class="QPushButton" name="change_dsiware_folder">
+             <property name="text">
+              <string>Change</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="3">
+            <widget class="QPushButton" name="clear_dsiware_folder">
+             <property name="text">
+              <string>Clear</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
          <layout class="QVBoxLayout" name="horizontalLayout_5">
           <item>
            <widget class="QCheckBox" name="toggle_compress_cia">

@@ -26,6 +26,7 @@ constexpr u64 TID_HIGH_MASK = 0xFFFFFFFF00000000ULL;
 constexpr u64 TID_HIGH_APPLICATION = 0x0004000000000000ULL;
 constexpr u64 TID_HIGH_UPDATE = 0x0004000E00000000ULL;
 constexpr u64 TID_HIGH_DLC = 0x0004008C00000000ULL;
+constexpr u64 TWL_TITLE_ID_FLAG = 0x0000800000000000ULL;
 
 struct Entry {
     std::string cia_path; // plain or virtual (zip entry) path of the CIA
@@ -79,7 +80,8 @@ std::optional<std::vector<u8>> ReadCandidatePrefix(const Candidate& candidate,
  * extraction) and registers it if its title ID is one of the wanted ones.
  * Returns the registered title ID, or 0.
  */
-u64 TryRegister(const Candidate& candidate, std::initializer_list<u64> wanted_tids) {
+template <typename TitleIdPredicate>
+u64 TryRegister(const Candidate& candidate, TitleIdPredicate&& wanted) {
     constexpr std::size_t INITIAL_PREFIX_SIZE = 0x10000;
     auto prefix = ReadCandidatePrefix(candidate, INITIAL_PREFIX_SIZE);
     if (!prefix || prefix->size() < CIA_HEADER_SIZE) {
@@ -105,7 +107,7 @@ u64 TryRegister(const Candidate& candidate, std::initializer_list<u64> wanted_ti
 
     const TitleMetadata& tmd = container->GetTitleMetadata();
     const u64 title_id = tmd.GetTitleID();
-    if (std::ranges::find(wanted_tids, title_id) == wanted_tids.end()) {
+    if (!wanted(title_id)) {
         return 0;
     }
 
@@ -179,10 +181,11 @@ void CollectFolderCandidates(const std::string& folder, const std::string& base_
 // Registers candidates for one wanted title: name-matched candidates first,
 // falling back to probing every candidate only if none of them matched.
 void RegisterFrom(const std::vector<Candidate>& candidates, u64 wanted_tid) {
+    const auto wanted = [wanted_tid](u64 tid) { return tid == wanted_tid; };
     bool found = false;
     for (const auto& candidate : candidates) {
         if (candidate.name_matched) {
-            found |= TryRegister(candidate, {wanted_tid}) != 0;
+            found |= TryRegister(candidate, wanted) != 0;
         }
     }
     if (found) {
@@ -190,7 +193,7 @@ void RegisterFrom(const std::vector<Candidate>& candidates, u64 wanted_tid) {
     }
     for (const auto& candidate : candidates) {
         if (!candidate.name_matched) {
-            TryRegister(candidate, {wanted_tid});
+            TryRegister(candidate, wanted);
         }
     }
 }
@@ -236,7 +239,9 @@ void ScanForCompanionTitles(u64 base_title_id, const std::string& base_game_path
                 });
             }
             for (const auto& candidate : pack_candidates) {
-                TryRegister(candidate, {update_tid, dlc_tid});
+                TryRegister(candidate, [update_tid, dlc_tid](u64 tid) {
+                    return tid == update_tid || tid == dlc_tid;
+                });
             }
         }
     }
@@ -251,6 +256,15 @@ void ScanForCompanionTitles(u64 base_title_id, const std::string& base_game_path
                             dlc_candidates);
     RegisterFrom(dlc_candidates, dlc_tid);
 
+    // Every DSiWare CIA in the DSiWare folder is registered, regardless of the
+    // booted game: they are stand-alone titles, listed by AM enumeration and
+    // exportable, though Azahar cannot execute TWL titles.
+    std::vector<Candidate> dsiware_candidates;
+    CollectFolderCandidates(Settings::values.dsiware_folder.GetValue(), "", "", dsiware_candidates);
+    for (const auto& candidate : dsiware_candidates) {
+        TryRegister(candidate, [](u64 tid) { return (tid & TWL_TITLE_ID_FLAG) != 0; });
+    }
+
     std::scoped_lock lock{registry_mutex};
     LOG_INFO(Service_AM, "Virtual title scan for {:016x}: update {}, DLC {}", base_title_id,
              registry.contains(update_tid) ? "found" : "not found",
@@ -260,6 +274,16 @@ void ScanForCompanionTitles(u64 base_title_id, const std::string& base_game_path
 bool HasTitle(u64 title_id) {
     std::scoped_lock lock{registry_mutex};
     return registry.contains(title_id);
+}
+
+std::vector<u64> GetAllTitleIds() {
+    std::scoped_lock lock{registry_mutex};
+    std::vector<u64> ids;
+    ids.reserve(registry.size());
+    for (const auto& [tid, entry] : registry) {
+        ids.push_back(tid);
+    }
+    return ids;
 }
 
 std::optional<std::string> GetMetadataPath(u64 title_id) {
@@ -284,8 +308,7 @@ std::optional<std::string> GetContentPath(u64 title_id, std::size_t index) {
         !entry.container->GetHeader()->IsContentPresent(index)) {
         return std::nullopt;
     }
-    return FileUtil::MakeVirtualRangePath(entry.cia_path,
-                                          entry.container->GetContentOffset(index),
+    return FileUtil::MakeVirtualRangePath(entry.cia_path, entry.container->GetContentOffset(index),
                                           entry.container->GetContentSize(index));
 }
 
