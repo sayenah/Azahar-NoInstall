@@ -32,8 +32,12 @@ import org.citra.citra_emu.R
 import org.citra.citra_emu.adapters.HomeSettingAdapter
 import org.citra.citra_emu.databinding.DialogSoftwareKeyboardBinding
 import org.citra.citra_emu.databinding.FragmentHomeSettingsBinding
+import android.net.Uri
+import org.citra.citra_emu.NativeLibrary
 import org.citra.citra_emu.features.settings.SettingKeys
 import org.citra.citra_emu.features.settings.model.Settings
+import org.citra.citra_emu.features.settings.model.StringSetting
+import org.citra.citra_emu.utils.BuildUtil
 import org.citra.citra_emu.features.settings.ui.SettingsActivity
 import org.citra.citra_emu.features.settings.utils.SettingsFile
 import org.citra.citra_emu.model.Game
@@ -183,6 +187,24 @@ class HomeSettingsFragment : Fragment() {
                 details = homeViewModel.gamesDir
             ),
             HomeSetting(
+                R.string.select_updates_folder,
+                R.string.select_updates_folder_description,
+                R.drawable.ic_add,
+                { getUpdatesFolder.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).data) }
+            ),
+            HomeSetting(
+                R.string.select_dlc_folder,
+                R.string.select_dlc_folder_description,
+                R.drawable.ic_add,
+                { getDlcFolder.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).data) }
+            ),
+            HomeSetting(
+                R.string.select_dsiware_folder,
+                R.string.select_dsiware_folder_description,
+                R.drawable.ic_add,
+                { getDsiWareFolder.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).data) }
+            ),
+            HomeSetting(
                 R.string.preferences_theme,
                 R.string.theme_and_color_description,
                 R.drawable.ic_palette,
@@ -252,6 +274,45 @@ class HomeSettingsFragment : Fragment() {
 
             homeViewModel.setGamesDir(requireActivity(), result.path!!)
         }
+
+    private val getUpdatesFolder =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { result ->
+            saveContentFolder(result, StringSetting.UPDATES_FOLDER, R.string.updates_dir_selected)
+        }
+
+    private val getDlcFolder =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { result ->
+            saveContentFolder(result, StringSetting.DLC_FOLDER, R.string.dlc_dir_selected)
+        }
+
+    private val getDsiWareFolder =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { result ->
+            saveContentFolder(result, StringSetting.DSIWARE_FOLDER, R.string.dsiware_dir_selected)
+        }
+
+    // Persists a picked no-install content folder into config.ini so the
+    // native side can scan it at game boot.
+    private fun saveContentFolder(result: Uri?, setting: StringSetting, toastId: Int) {
+        if (result == null) {
+            return
+        }
+        requireContext().contentResolver.takePersistableUriPermission(
+            result,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
+
+        // On builds with raw filesystem access the native side scans the folder
+        // with regular file APIs, which need a real path rather than a SAF URI.
+        setting.string = if (BuildUtil.isGooglePlayBuild) {
+            result.toString()
+        } else {
+            NativeLibrary.getNativePath(result)
+        }
+        SettingsFile.saveFile(SettingsFile.FILE_NAME_CONFIG, setting)
+        NativeLibrary.reloadSettings()
+
+        Toast.makeText(CitraApplication.appContext, toastId, Toast.LENGTH_LONG).show()
+    }
 
     private fun shareLog() {
         val logDirectory = DocumentFile.fromTreeUri(

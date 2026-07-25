@@ -287,6 +287,15 @@ static const char* android_config_default_file_content = (BOOST_HANA_STRING(R"(
 # 0: Disabled, 1 (default): Enabled
 )") DECLARE_KEY(async_fs_operations) BOOST_HANA_STRING(R"(
 
+# Folder containing update CIAs (or zips of them) served in place, no install
+)") DECLARE_KEY(updates_folder) BOOST_HANA_STRING(R"(
+
+# Folder containing DLC CIAs (or zips of them) served in place, no install
+)") DECLARE_KEY(dlc_folder) BOOST_HANA_STRING(R"(
+
+# Folder containing DSiWare CIAs (or zips of them) served in place, no install
+)") DECLARE_KEY(dsiware_folder) BOOST_HANA_STRING(R"(
+
 # Position of the performance overlay
 # 0: Top Left
 # 1: Center Top
