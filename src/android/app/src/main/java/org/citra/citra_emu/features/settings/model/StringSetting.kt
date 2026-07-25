@@ -17,7 +17,10 @@ enum class StringSetting(
     CAMERA_OUTER_LEFT_NAME(SettingKeys.camera_outer_left_name(), Settings.SECTION_CAMERA, "ndk"),
     CAMERA_OUTER_LEFT_CONFIG(SettingKeys.camera_outer_left_config(), Settings.SECTION_CAMERA, "_back"),
     CAMERA_OUTER_RIGHT_NAME(SettingKeys.camera_outer_right_name(), Settings.SECTION_CAMERA, "ndk"),
-    CAMERA_OUTER_RIGHT_CONFIG(SettingKeys.camera_outer_right_config(), Settings.SECTION_CAMERA, "_back");
+    CAMERA_OUTER_RIGHT_CONFIG(SettingKeys.camera_outer_right_config(), Settings.SECTION_CAMERA, "_back"),
+    UPDATES_FOLDER(SettingKeys.updates_folder(), Settings.SECTION_STORAGE, ""),
+    DLC_FOLDER(SettingKeys.dlc_folder(), Settings.SECTION_STORAGE, ""),
+    DSIWARE_FOLDER(SettingKeys.dsiware_folder(), Settings.SECTION_STORAGE, "");
 
     override var string: String = defaultValue
 

@@ -231,6 +231,9 @@ void Config::ReadValues() {
 
     // Storage
     ReadSetting("Storage", Settings::values.compress_cia_installs);
+    ReadSetting("Storage", Settings::values.updates_folder);
+    ReadSetting("Storage", Settings::values.dlc_folder);
+    ReadSetting("Storage", Settings::values.dsiware_folder);
 
     // Utility
     ReadSetting("Utility", Settings::values.dump_textures);

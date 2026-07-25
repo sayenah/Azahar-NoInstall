@@ -18,6 +18,9 @@ object SettingKeys {
     external fun enable_required_online_lle_modules(): String
     external fun use_virtual_sd(): String
     external fun compress_cia_installs(): String
+    external fun updates_folder(): String
+    external fun dlc_folder(): String
+    external fun dsiware_folder(): String
     external fun region_value(): String
     external fun init_clock(): String
     external fun init_time(): String
