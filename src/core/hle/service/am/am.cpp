@@ -1468,6 +1468,18 @@ void Module::ScanForTitlesImpl(Service::FS::MediaType media_type) {
         }
     }
 
+    // Titles served in place from CIA files (no-install) are part of the
+    // title list even though they have no directory on the emulated media.
+    if (media_type != Service::FS::MediaType::GameCard) {
+        auto& title_list = am_title_list[static_cast<u32>(media_type)];
+        for (const u64 tid : FileSys::VirtualTitles::GetAllTitleIds()) {
+            if (GetTitleMediaType(tid) == media_type &&
+                std::find(title_list.begin(), title_list.end(), tid) == title_list.end()) {
+                title_list.push_back(tid);
+            }
+        }
+    }
+
     LOG_DEBUG(Service_AM, "Finished title scan for media_type={}", static_cast<int>(media_type));
 }
 
