@@ -1,141 +1,101 @@
-![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
+<div align="center">
 
-![Current Release](https://img.shields.io/github/v/release/azahar-emu/azahar?label=Current%20Release)
-![Current Prerelease](https://img.shields.io/github/v/release/azahar-emu/azahar?include_prereleases&label=Current%20Prerelease)
+# 🎮 Azahar **NoInstall**
 
-![GitHub Downloads](https://img.shields.io/github/downloads/azahar-emu/azahar/total?logo=github&label=GitHub%20Downloads)
-![Google Play Downloads](https://playbadges.pavi2410.com/badge/downloads?id=io.github.lime3ds.android&pretty&label=Play%20Store%20Downloads)
-![Flathub Downloads](https://img.shields.io/flathub/downloads/org.azahar_emu.Azahar?logo=flathub&label=Flathub%20Downloads)
-![CI Build Status](https://github.com/azahar-emu/azahar/actions/workflows/build.yml/badge.svg)
+### A 3DS emulator that just *runs* your games — no installing, no clutter, no fuss.
 
-<b>Azahar</b> is an open-source 3DS emulator project based on Citra.
+A friendly fork of [**Azahar**](https://github.com/azahar-emu/azahar) that adds a complete **no-install workflow**: point it at your folders, click a game, and play. Updates, DLC, and DSiWare are picked up automatically. Encrypted and decrypted dumps both work. Nothing is ever written into the emulated console.
 
-It was created from the merging of PabloMK7's Citra fork and the Lime3DS project, both of which emerged shortly after Citra was taken down.
+![Latest NoInstall Release](https://img.shields.io/github/v/release/sayenah/Azahar-NoInstall?label=NoInstall%20Release&color=8a63d2)
+![Tracks Upstream](https://img.shields.io/badge/tracks-azahar--emu%2Fazahar-blue)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Android-brightgreen)
+![License](https://img.shields.io/badge/license-GPLv2-orange)
 
-The goal of this project is to be the de-facto platform for future development.
-
-# Installation
-
-### Windows
-
-Azahar is available as both an installer and a zip archive.
-
-Download the latest release in your preferred format from the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-If you are unsure of whether you want to use MSVC or MSYS2, use MSYS2.
+</div>
 
 ---
 
-### MacOS
+## ✨ What makes this fork different
 
-To download a build that will work on all Macs, you can download the `macos-universal` build on the [Releases](https://github.com/azahar-emu/azahar/releases) page.
+Stock Azahar (like Citra before it) makes you **install** `.cia` files — DLC, updates and DSiWare all get imported into the emulated console's storage, where they tangle up with your save files and turn cloud-syncing into a nightmare. This fork throws that whole model out.
 
-Alternatively, if you wish to download a build specifically for your Mac, you can choose either:
+| | Stock Azahar | **Azahar NoInstall** |
+|---|:---:|:---:|
+| Boot a game from a `.zip` | ❌ | ✅ |
+| Boot a `.cia` without installing | ❌ | ✅ |
+| DLC / Updates from a folder | ❌ (must install) | ✅ (drop-in, auto-matched) |
+| Encrypted **and** decrypted dumps | ⚠️ install-only | ✅ everywhere |
+| Writes into emulated NAND/SD | Always | **Never** |
+| Save files stay separate from content | ❌ | ✅ |
 
-- `macos-arm64` for Apple Silicon Macs
-- `macos-x86_64` for Intel Macs
+### 📦 Run anything, in place
+
+Open a game as a `.zip`, `.cci`, `.cxi`, `.3ds`, or `.cia` — it boots directly. A `.zip` can even bundle the game **and** its update/DLC together as a single self-contained pack.
+
+### 🗂️ Folder-based DLC, Updates & DSiWare
+
+Set three folders once. Drop your `.cia` files (or `.zip`s containing them) in. When you launch a game, its update and DLC are found automatically — matched by [No-Intro](https://no-intro.org/) filenames and **verified by title ID**, so the wrong content can never attach to the wrong game.
+
+```
+Updates/   Zelda OoT 3D (USA) (Update).cia
+DLC/       Fire Emblem Awakening (USA) (DLC).zip
+DSiWare/   Dr. Mario Express (USA).cia
+Games/     Zelda OoT 3D (USA).zip
+```
+
+### 🔐 Encrypted or decrypted — both just work
+
+Encrypted cartridge dumps and CIAs no longer need to be pre-decrypted. When the console keys are available (Azahar already ships the common ones; add your own `keys.txt` for the rest), encrypted content is decrypted on the fly into a **temporary cache that is wiped when you close the emulator**. Your original files are never modified, and nothing is left behind.
+
+### 🧹 Zero clutter, by design
+
+- Nothing is ever written into the emulated NAND/SD card.
+- Save data (`.../title/<id>/data/`) stays cleanly separated from game content — **cloud-sync friendly at last**.
+- Decompressed and decrypted files live in a transient cache that clears on exit.
 
 ---
 
-### Android
+## ⬇️ Download
 
-There are two variants of Azahar available on Android, those being the Vanilla and Google Play builds.
+Grab the latest build from the [**Releases**](https://github.com/sayenah/Azahar-NoInstall/releases) page. Every release is named `<version>-noinstall` and is **built automatically from the matching upstream Azahar release**, so you always get the NoInstall features on top of a real, versioned Azahar.
 
-The Vanilla build is technically superior, as it uses an alternative method of file management which is faster, but isn't permitted on the Google Play store.
-
-For most users, we currently recommended downloading Azahar on Android via the Google Play Store for ease of accessibility:
-
-<a href='https://play.google.com/store/apps/details?id=io.github.lime3ds.android'><img width='180' alt='Get it on Google Play' src='https://raw.githubusercontent.com/pioug/google-play-badges/06ccd9252af1501613da2ca28eaffe31307a4e6d/svg/English.svg'/></a>
-
-Alternatively, you can install the app using Obtainium, allowing you to use the Vanilla variant:
-1. Download and install Obtainium from [here](https://github.com/ImranR98/Obtainium/releases) (use the file named `app-release.apk`)
-2. Open Obtainium and click 'Add App'
-3. Type `https://github.com/azahar-emu/azahar` into the 'App Source URL' section
-4. Click 'Add'
-5. Click 'Install', and select the preferred variant
-
-If you wish, you can also simply install the latest APK from the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-Keep in mind that you will not recieve automatic updates when installing via the APK.
-
----
-
-### Linux
-
-The recommended format for using Azahar on Linux is the Flatpak available on Flathub:
-
-<a href='https://flathub.org/apps/org.azahar_emu.Azahar'><img width='180' alt='Download on Flathub' src='https://dl.flathub.org/assets/badges/flathub-badge-en.png'/></a>
-
-Azahar is also available as an AppImage on the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-There are two variants of the AppImage available, those being `azahar.AppImage` and `azahar-wayland.AppImage`.
-
-If you are unsure of which variant to use, we recommend using the default `azahar.AppImage`. This is because of upstream issues in the Wayland ecosystem which may cause problems when running the emulator (e.g. [#1162](https://github.com/azahar-emu/azahar/issues/1162)).
-
-Unless you explicitly require native Wayland support (e.g. you are running a system with no Xwayland), the non-Wayland variant is recommended.
-
-The Flatpak build of Azahar also has native Wayland support disabled by default. If you require native Wayland support, it can be enabled using [Flatseal](https://flathub.org/en/apps/com.github.tchx84.Flatseal).
-
-# Build instructions
-
-Please refer this repository's [wiki](https://github.com/azahar-emu/azahar/wiki/Building-From-Source) for build instructions
-
-# How can I contribute?
-
-### Pull requests
-
-If you want to implement a change and have the technical capability to do so, we would be happy to accept your contributions.
-
-If you are contributing a new feature, it is highly suggested that you first make a Feature Request issue to discuss the addition before writing any code. This is to ensure that your time isn't wasted working on a feature which isn't deemed appropriate for the project.
-
-After creating a pull request, please don't repeatedly merge `master` into your branch. A maintainer will update the branch for you if/ when it is appropriate to do so.
-
-### Language translations
-
-Additionally, we are accepting language translations on [Transifex](https://app.transifex.com/azahar/azahar). If you know a non-english language listed on our Transifex page, please feel free to contribute.
+| Platform | File |
+|---|---|
+| 🪟 **Windows** (x64) | `...-windows-msvc.zip` |
+| 🍎 **macOS** (Apple Silicon) | `...-macos-arm64.zip` — run `xattr -cr Azahar.app` once before first launch |
+| 🤖 **Android** (sideload) | `...-android.apk` |
 
 > [!NOTE]
-> We are not currently accepting new languages for translation. Please do not request for new languages or language variants to be added.
+> These are unofficial personal builds. They are **not** affiliated with or endorsed by the Azahar project. For the official emulator, see [azahar-emu/azahar](https://github.com/azahar-emu/azahar).
 
-### Compatibility reports
+---
 
-Even if you don't wish to contribute code or translations, you can help the project by reporting game compatibility data to our compatibility list.
+## 🚀 Getting started
 
-To do so, simply read https://github.com/azahar-emu/compatibility-list/blob/master/CONTRIBUTING.md and follow the instructions.
+1. **Add your game folders.** Desktop: the game list directory picker, as usual. Android: *Home → Select Applications Folder*.
+2. **Set your content folders.**
+   - **Desktop:** *Emulation → Configure → Storage → No-Install Content Folders* — pick your Updates, DLC and DSiWare folders.
+   - **Android:** *Home → Select Updates / DLC / DSiWare Folder*.
+3. **Name your files** with the No-Intro convention so they auto-match — e.g. `Game (Region) (Update).cia`, `Game (Region) (DLC).zip`. (If names don't match, every file in the folder is still probed by title ID as a fallback.)
+4. **Play.** Click a game. Its update and DLC attach automatically; encrypted files decrypt transparently.
 
-Contributing compatibility data helps more accurately reflect the current capabilities of the emulator, so it would be highly appreciated if you could go through the reporting process after completing a game.
+> [!TIP]
+> Want *zero* disk writes even mid-session? Store your zips **uncompressed** (`zip -0`). Uncompressed (stored) entries are read directly out of the archive — nothing is ever extracted.
 
-# Minimum requirements
+> [!IMPORTANT]
+> Decryption requires the 3DS console keys. Azahar ships the common ones, so most retail content works out of the box. For anything that doesn't decrypt, place your own `keys.txt` in Azahar's `sysdata` folder. This fork only decrypts content **you supply** — please only use it with games you own.
 
-Below are the minimum requirements to run Azahar:
+---
 
-### Desktop
+## 🛠️ Building & contributing
 
-```
-Operating System: Windows 10 (64-bit), MacOS 13.4 (Ventura), or modern 64-bit Linux
-CPU: x86-64/ARM64 CPU (Windows for ARM not supported).
-     Single core performance higher than 1,800 on Passmark.
-     SSE4.2 required on x86_64.
-GPU: OpenGL 4.3 or Vulkan 1.1 support
-Memory: 2GB of RAM. 4GB is recommended
-```
-### Android
+- **Build from source:** the standard [Azahar build instructions](https://github.com/azahar-emu/azahar/wiki/Building-From-Source) apply unchanged.
+- **How the NoInstall system works** (architecture, file map, gotchas, how to extend it, how the auto-release pipeline works): see [**`docs/NOINSTALL.md`**](docs/NOINSTALL.md). Start here if you're modifying this fork.
 
-```
-Operating System: Android 10.0+ (64-bit)
-CPU: Snapdragon 835 SoC or better
-GPU: OpenGL ES 3.2 or Vulkan 1.1 support
-Memory: 2GB of RAM. 4GB is recommended
-```
+---
 
-# What's next?
+## ❤️ Credits & license
 
-We share public roadmaps for upcoming releases in the form of GitHub milestones.
+This project is a fork of **[Azahar](https://github.com/azahar-emu/azahar)**, itself born from the merger of PabloMK7's Citra fork and Lime3DS. All of the heavy lifting — the actual 3DS emulation — is their work, and this fork stands entirely on it. Please support and credit the upstream project.
 
-You can find these at https://github.com/azahar-emu/azahar/milestones.
-
-# Join the conversation
-
-We have a community Discord server where you can chat about the project, keep up to date with the latest announcements, or coordinate emulator development.
-
-Join at https://discord.gg/4ZjMpAp3M6
+Licensed under **GPLv2 or any later version**, the same as Azahar. See [`license.txt`](license.txt).
