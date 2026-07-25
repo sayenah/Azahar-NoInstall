@@ -98,7 +98,6 @@ class Settings {
 
     companion object {
         const val SECTION_CORE = "Core"
-        const val SECTION_STORAGE = "Storage"
         const val SECTION_SYSTEM = "System"
         const val SECTION_CAMERA = "Camera"
         const val SECTION_CONTROLS = "Controls"
