@@ -25,6 +25,7 @@
 #include "core/core_timing.h"
 #include "core/dumping/backend.h"
 #include "core/file_sys/ncch_container.h"
+#include "core/file_sys/virtual_titles.h"
 #include "core/frontend/image_interface.h"
 #ifdef ENABLE_GDBSTUB
 #include "core/gdbstub/gdbstub.h"
@@ -303,6 +304,11 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
 
     u64_le program_id = 0;
     app_loader->ReadProgramId(program_id);
+
+    // Register update/DLC CIAs from the content folders (or the game's own
+    // zip) so they are served in place without installation.
+    FileSys::VirtualTitles::ScanForCompanionTitles(program_id, filepath);
+
     if (restore_plugin_context.has_value() && restore_plugin_context->is_enabled &&
         restore_plugin_context->use_user_load_parameters) {
         if (restore_plugin_context->user_load_parameters.low_title_Id ==
@@ -692,6 +698,10 @@ void System::Shutdown(bool is_deserializing) {
 
     // Shutdown emulation session
     is_powered_on = false;
+
+    if (!is_deserializing) {
+        FileSys::VirtualTitles::Clear();
+    }
 
     gpu.reset();
     if (!is_deserializing) {
