@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Merge NoInstall onto ${{ needs.check.outputs.tag }}
+      - name: Apply NoInstall commits onto ${{ needs.check.outputs.tag }}
         run: |
           set -euo pipefail
           tag='${{ needs.check.outputs.tag }}'
@@ -77,18 +77,23 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/azahar-emu/azahar.git
           git fetch upstream "refs/tags/${tag}:refs/tags/${tag}"
+          # Only the feature's own commits are applied - merging the whole
+          # branch would drag along all of upstream master since the fork
+          # point, which conflicts with older release tags.
+          base=$(git merge-base origin/master origin/noinstall/core)
+          commits=$(git rev-list --reverse "${base}..origin/noinstall/core")
           git checkout -B "noinstall/${tag}" "refs/tags/${tag}"
-          if ! git merge --no-edit origin/noinstall/core; then
+          if ! git cherry-pick ${commits}; then
             {
-              echo "## Merge conflict for ${tag}"
+              echo "## Cherry-pick conflict for ${tag}"
               echo ""
-              echo "noinstall/core no longer merges cleanly onto upstream tag ${tag}."
+              echo "The NoInstall commits no longer apply cleanly onto upstream tag ${tag}."
               echo "Resolve locally, then push the result:"
               echo ""
               echo '```'
               echo "git fetch upstream --tags"
               echo "git checkout -b noinstall/${tag} ${tag}"
-              echo "git merge noinstall/core   # fix conflicts, commit"
+              echo "git cherry-pick ${base}..noinstall/core   # fix conflicts as prompted"
               echo "git push -f origin noinstall/${tag}"
               echo "# then re-run this workflow"
               echo '```'
