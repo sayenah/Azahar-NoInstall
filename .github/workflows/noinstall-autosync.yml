@@ -219,7 +219,9 @@ jobs:
         with:
           pattern: release-*
           merge-multiple: true
-          path: dist/
+          # NOT dist/ - the repo already has a dist/ directory (packaging files)
+          # that would otherwise be globbed into the release upload.
+          path: release-artifacts/
       - name: Tag and publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -228,8 +230,9 @@ jobs:
           tag='${{ needs.check.outputs.tag }}'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${tag}-noinstall"
-          git push origin "refs/tags/${tag}-noinstall"
+          # Force so a re-run after a failed publish can re-tag cleanly.
+          git tag -f "${tag}-noinstall"
+          git push -f origin "refs/tags/${tag}-noinstall"
           {
             echo "Automated build of upstream [Azahar ${tag}](https://github.com/azahar-emu/azahar/releases/tag/${tag}) with the NoInstall feature (branch \`noinstall/core\`) merged on top."
             echo ""
@@ -241,11 +244,14 @@ jobs:
           if [ '${{ needs.check.outputs.prerelease }}' = "true" ]; then
             prerelease_flag="--prerelease"
           fi
+          # Only upload the built artifact files.
+          shopt -s nullglob
+          assets=(release-artifacts/*.zip release-artifacts/*.apk release-artifacts/*.aab)
           gh release create "${tag}-noinstall" \
             --title "Azahar ${tag} + NoInstall" \
             --notes-file release-notes.md \
             $prerelease_flag \
-            dist/*
+            "${assets[@]}"
       - name: Re-dispatch if more releases are pending
         env:
           GH_TOKEN: ${{ github.token }}
