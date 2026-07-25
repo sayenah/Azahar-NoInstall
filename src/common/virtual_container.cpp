@@ -272,6 +272,15 @@ std::optional<std::vector<ZipEntryInfo>> ListZipContents(const std::string& zip_
     return entries;
 }
 
+void ClearExtractionCache() {
+    std::scoped_lock lock{extraction_mutex};
+    const std::string cache_dir = GetExtractionCacheDir();
+    if (Exists(cache_dir)) {
+        LOG_INFO(Common_Filesystem, "Clearing zip extraction cache at {}", cache_dir);
+        DeleteDirRecursively(cache_dir);
+    }
+}
+
 std::optional<std::vector<u8>> ReadZipEntryPrefix(const std::string& zip_path,
                                                   const std::string& entry_name,
                                                   std::size_t max_bytes) {
