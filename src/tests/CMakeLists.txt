@@ -5,6 +5,7 @@ add_executable(tests
     common/virtual_container.cpp
     core/core_timing.cpp
     core/file_sys/path_parser.cpp
+    core/file_sys/virtual_titles.cpp
     core/hle/kernel/hle_ipc.cpp
     core/memory/memory.cpp
     core/memory/vm_manager.cpp

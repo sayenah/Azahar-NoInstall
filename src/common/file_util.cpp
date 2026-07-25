@@ -1563,7 +1563,8 @@ std::size_t IOFile::ReadAtImpl(void* data, std::size_t byte_count, std::size_t o
         if (offset >= virt_size) {
             return 0;
         }
-        byte_count = std::min<std::size_t>(byte_count, static_cast<std::size_t>(virt_size - offset));
+        byte_count =
+            std::min<std::size_t>(byte_count, static_cast<std::size_t>(virt_size - offset));
         offset += virt_base;
     }
 
