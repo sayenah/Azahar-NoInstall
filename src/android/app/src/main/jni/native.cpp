@@ -29,6 +29,7 @@
 #include "common/file_util.h"
 #include "common/logging/backend.h"
 #include "common/logging/log.h"
+#include "common/virtual_container.h"
 #include "common/microprofile.h"
 #include "common/play_time_manager.h"
 #include "common/scm_rev.h"
@@ -667,6 +668,9 @@ void Java_org_citra_citra_1emu_NativeLibrary_setUserDirectory(JNIEnv* env,
                                                               [[maybe_unused]] jobject obj,
                                                               jstring j_directory) {
     FileUtil::SetCurrentDir(GetJString(env, j_directory));
+    // Android has no reliable app-exit hook, so last session's zip extraction
+    // cache is dropped at startup instead (desktop clears it on exit).
+    FileUtil::ClearExtractionCache();
 }
 
 jobjectArray Java_org_citra_citra_1emu_NativeLibrary_getInstalledGamePathsImpl(
