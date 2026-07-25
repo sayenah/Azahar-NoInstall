@@ -40,7 +40,8 @@ void WriteBE16(std::vector<u8>& buffer, std::size_t offset, u16 value) {
 // Builds a minimal TMD: RSA-2048/SHA-256 signature type, one content record.
 std::vector<u8> BuildTestTmd(u64 title_id, u16 title_version, u64 content_size, u16 content_type) {
     constexpr std::size_t SIGNATURE_SIZE = 0x100;
-    constexpr std::size_t BODY_START = 0x140; // AlignUp(4 + 0x100, 0x40)
+    // TMD body starts at the signature rounded up to the next 0x40 boundary.
+    constexpr std::size_t BODY_START = Common::AlignUp(sizeof(u32) + SIGNATURE_SIZE, 0x40);
     constexpr std::size_t BODY_SIZE = 0x9C4;
     constexpr std::size_t CHUNK_SIZE = 0x30;
 
