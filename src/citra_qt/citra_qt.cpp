@@ -84,6 +84,7 @@
 #include "common/common_paths.h"
 #include "common/dynamic_library/dynamic_library.h"
 #include "common/file_util.h"
+#include "common/virtual_container.h"
 #include "common/literals.h"
 #include "common/logging/backend.h"
 #include "common/logging/log.h"
@@ -3968,6 +3969,10 @@ void GMainWindow::closeEvent(QCloseEvent* event) {
         ShutdownGame();
     }
 
+    // Content extracted from compressed zips is only a boot-time cache; drop
+    // it on exit so no-install play leaves nothing behind.
+    FileUtil::ClearExtractionCache();
+
     // Save settings in case they were changed from outside the configuration menu.
     config->Save();
 
@@ -3982,8 +3987,8 @@ static bool IsSingleFileDropEvent(const QMimeData* mime) {
     return mime->hasUrls() && mime->urls().length() == 1;
 }
 
-static const std::array<std::string, 11> AcceptedExtensions = {
-    "cci", "cxi", "bin", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx", "3ds"};
+static const std::array<std::string, 13> AcceptedExtensions = {
+    "cci", "cxi", "bin", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx", "3ds", "cia", "zip"};
 
 static bool IsCorrectFileExtension(const QMimeData* mime) {
     const QString& filename = mime->urls().at(0).toLocalFile();
