@@ -26,6 +26,7 @@
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
 #include "common/string_util.h"
+#include "common/virtual_container.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -156,6 +157,10 @@ static void StripTailDirSlashes(std::string& fname) {
 }
 
 bool Exists(const std::string& filename) {
+    if (IsVirtualPath(filename)) {
+        return ResolveVirtualPath(filename).has_value();
+    }
+
     std::string copy(filename);
     StripTailDirSlashes(copy);
 
@@ -510,6 +515,11 @@ bool Copy(const std::string& srcFilename, const std::string& destFilename) {
 }
 
 u64 GetSize(const std::string& filename) {
+    if (IsVirtualPath(filename)) {
+        const auto range = ResolveVirtualPath(filename);
+        return range ? range->size : 0;
+    }
+
     if (!Exists(filename)) {
         LOG_ERROR(Common_Filesystem, "failed {}: No such file", filename);
         return 0;
@@ -1268,6 +1278,9 @@ void IOFile::Swap(IOFile& other) noexcept {
     std::swap(m_file, other.m_file);
     std::swap(m_fd, other.m_fd);
     std::swap(m_good, other.m_good);
+    std::swap(is_virtual, other.is_virtual);
+    std::swap(virt_base, other.virt_base);
+    std::swap(virt_size, other.virt_size);
     std::swap(filename, other.filename);
     std::swap(openmode, other.openmode);
     std::swap(flags, other.flags);
@@ -1314,12 +1327,34 @@ bool IOFile::Open() {
 #endif
     }
 
+    // Virtual container paths (e.g. "Game.zip#Game.3ds") resolve to a
+    // read-only byte range of a real host file.
+    std::string open_path = filename;
+    if (IsVirtualPath(filename)) {
+        const bool read_only = openmode.find('r') != std::string::npos &&
+                               openmode.find_first_of("wa+") == std::string::npos;
+        if (!read_only) {
+            LOG_ERROR(Common_Filesystem, "Virtual container paths are read-only: {}", filename);
+            m_good = false;
+            return false;
+        }
+        const auto range = ResolveVirtualPath(filename);
+        if (!range) {
+            m_good = false;
+            return false;
+        }
+        open_path = range->host_path;
+        is_virtual = true;
+        virt_base = range->offset;
+        virt_size = range->size;
+    }
+
 #ifdef _WIN32
     // Open with FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE
     // flags. This mimics linux behaviour as much as possible, which
     // the 3DS also does.
 
-    const std::wstring wfilename = Common::UTF8ToUTF16W(filename);
+    const std::wstring wfilename = Common::UTF8ToUTF16W(open_path);
 
     DWORD access = 0;
     DWORD creation = OPEN_EXISTING;
@@ -1359,7 +1394,7 @@ bool IOFile::Open() {
 
 #elif defined(ANDROID) && !defined(HAVE_LIBRETRO_VFS)
     if (AndroidUtils::CanUseRawFS()) {
-        m_file = FOPEN(AndroidUtils::TranslateFilePath(filename).c_str(), openmode.c_str());
+        m_file = FOPEN(AndroidUtils::TranslateFilePath(open_path).c_str(), openmode.c_str());
     } else {
         // Check whether filepath is startsWith content
         AndroidUtils::AndroidOpenMode android_open_mode = AndroidUtils::ParseOpenmode(openmode);
@@ -1378,7 +1413,7 @@ bool IOFile::Open() {
                 }
             }
         }
-        m_fd = AndroidUtils::OpenContentUri(filename, android_open_mode);
+        m_fd = AndroidUtils::OpenContentUri(open_path, android_open_mode);
         if (m_fd != -1) {
             int error_num = 0;
             m_file = fdopen(m_fd, openmode.c_str());
@@ -1391,9 +1426,13 @@ bool IOFile::Open() {
     }
     m_good = m_file != nullptr;
 #else
-    m_file = FOPEN(filename.c_str(), openmode.c_str());
+    m_file = FOPEN(open_path.c_str(), openmode.c_str());
     m_good = m_file != nullptr;
 #endif
+
+    if (is_virtual && m_good) {
+        m_good = SeekImpl(0, SEEK_SET);
+    }
 
     return m_good;
 }
@@ -1403,17 +1442,38 @@ bool IOFile::Close() {
         m_good = false;
 
     m_file = nullptr;
+    is_virtual = false;
+    virt_base = 0;
+    virt_size = 0;
     return m_good;
 }
 
 u64 IOFile::GetSize() const {
-    if (IsOpen())
-        return FileUtil::GetSize(m_file);
+    if (!IsOpen())
+        return 0;
 
-    return 0;
+    if (is_virtual)
+        return virt_size;
+
+    return FileUtil::GetSize(m_file);
 }
 
 bool IOFile::SeekImpl(s64 off, int origin) {
+    if (is_virtual) {
+        // Translate view-relative seeks to host file positions.
+        switch (origin) {
+        case SEEK_SET:
+            off += virt_base;
+            break;
+        case SEEK_END:
+            off += virt_base + virt_size;
+            origin = SEEK_SET;
+            break;
+        default:
+            break;
+        }
+    }
+
     if (!IsOpen() || 0 != FSEEK(m_file, off, origin))
         m_good = false;
 
@@ -1421,8 +1481,12 @@ bool IOFile::SeekImpl(s64 off, int origin) {
 }
 
 u64 IOFile::TellImpl() const {
-    if (IsOpen())
-        return FTELL(m_file);
+    if (IsOpen()) {
+        const u64 pos = FTELL(m_file);
+        if (is_virtual)
+            return pos >= virt_base ? pos - virt_base : 0;
+        return pos;
+    }
 
     return std::numeric_limits<u64>::max();
 }
@@ -1445,6 +1509,16 @@ std::size_t IOFile::ReadImpl(void* data, std::size_t length, std::size_t data_si
     }
 
     DEBUG_ASSERT(data != nullptr);
+
+    if (is_virtual && data_size != 0) {
+        // Clamp reads so they cannot escape the virtual view.
+        const u64 pos = TellImpl();
+        const u64 remaining = pos < virt_size ? virt_size - pos : 0;
+        length = std::min<std::size_t>(length, static_cast<std::size_t>(remaining / data_size));
+        if (length == 0) {
+            return 0;
+        }
+    }
 
     return FREAD(data, data_size, length, m_file);
 }
@@ -1489,6 +1563,14 @@ std::size_t IOFile::ReadAtImpl(void* data, std::size_t byte_count, std::size_t o
 
     DEBUG_ASSERT(data != nullptr);
 
+    if (is_virtual) {
+        if (offset >= virt_size) {
+            return 0;
+        }
+        byte_count = std::min<std::size_t>(byte_count, static_cast<std::size_t>(virt_size - offset));
+        offset += virt_base;
+    }
+
 #ifdef HAVE_LIBRETRO_VFS
     std::scoped_lock lock(m_file_pos_mutex);
     int64_t pos = filestream_tell(m_file);
@@ -1502,7 +1584,7 @@ std::size_t IOFile::ReadAtImpl(void* data, std::size_t byte_count, std::size_t o
 }
 
 std::size_t IOFile::WriteImpl(const void* data, std::size_t length, std::size_t data_size) {
-    if (!IsOpen()) {
+    if (!IsOpen() || is_virtual) {
         m_good = false;
         return std::numeric_limits<std::size_t>::max();
     }
@@ -1561,6 +1643,10 @@ size_t IOFile::WriteLine(const std::string_view line) {
 }
 
 bool IOFile::Resize(u64 size) {
+    if (is_virtual) {
+        m_good = false;
+        return false;
+    }
     if (!IsOpen() || 0 !=
 #if defined(HAVE_LIBRETRO_VFS)
                          filestream_truncate(m_file, size)

@@ -526,6 +526,12 @@ private:
     CORE_FILE* m_file = nullptr;
     int m_fd = -1;
     bool m_good = true;
+    // When the filename is a virtual container path (see virtual_container.h),
+    // the open file is a read-only view of [virt_base, virt_base + virt_size)
+    // within the resolved host file.
+    bool is_virtual = false;
+    u64 virt_base = 0;
+    u64 virt_size = 0;
 #ifdef HAVE_LIBRETRO_VFS
     // pread() doesn't touch the file position, so it's safe alongside
     // concurrent fread/fwrite. Libretro VFS has no pread equivalent, so
