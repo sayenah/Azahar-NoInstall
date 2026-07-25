@@ -2,12 +2,18 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include "common/logging/log.h"
 #include "common/string_util.h"
+#include "common/virtual_container.h"
 #include "core/core.h"
+#include "core/file_sys/cia_container.h"
+#include "core/file_sys/title_metadata.h"
 #include "core/hle/kernel/process.h"
+#include "core/hle/service/am/am.h"
 #include "core/loader/3dsx.h"
 #include "core/loader/artic.h"
 #include "core/loader/elf.h"
@@ -144,6 +150,118 @@ static std::unique_ptr<AppLoader> GetFileLoader(Core::System& system, FileUtil::
     }
 }
 
+static bool IsZipPath(const std::string& path) {
+    if (FileUtil::IsVirtualPath(path)) {
+        return false;
+    }
+    std::string extension;
+    Common::SplitPath(path, nullptr, nullptr, &extension);
+    return Common::ToLower(extension) == ".zip";
+}
+
+static std::optional<std::string> FindBootableZipEntry(const std::string& zip_path) {
+    const auto entries = FileUtil::ListZipContents(zip_path);
+    if (!entries) {
+        LOG_ERROR(Loader, "Not a readable zip archive: {}", zip_path);
+        return std::nullopt;
+    }
+
+    // Lower is better; ties keep listing order. Full games are preferred over
+    // homebrew formats when a zip contains several bootable files.
+    const auto priority = [](FileType type) -> int {
+        switch (type) {
+        case FileType::CCI:
+            return 0;
+        case FileType::CXI:
+            return 1;
+        case FileType::CIA:
+            return 2;
+        case FileType::THREEDSX:
+            return 3;
+        case FileType::ELF:
+            return 4;
+        default:
+            return -1;
+        }
+    };
+
+    std::optional<std::string> best;
+    int best_priority = std::numeric_limits<int>::max();
+    for (const auto& entry : entries.value()) {
+        // Skip macOS resource-fork junk and hidden entries
+        if (entry.name.starts_with("__MACOSX") || entry.name.starts_with(".")) {
+            continue;
+        }
+        std::string extension;
+        Common::SplitPath(entry.name, nullptr, nullptr, &extension);
+        const int entry_priority = priority(GuessFromExtension(extension));
+        if (entry_priority >= 0 && entry_priority < best_priority) {
+            best = entry.name;
+            best_priority = entry_priority;
+        }
+    }
+    if (!best) {
+        LOG_ERROR(Loader, "No bootable file found inside {}", zip_path);
+    }
+    return best;
+}
+
+/**
+ * Builds a loader that boots a CIA's executable content in place, without
+ * installing it. The CIA's main content is addressed as a virtual byte range
+ * (see virtual_container.h) and handed to the regular NCCH loader.
+ */
+static std::unique_ptr<AppLoader> GetCIADirectLoader(Core::System& system,
+                                                     const std::string& filepath) {
+    FileUtil::IOFile file(filepath, "rb");
+    if (!file.IsOpen()) {
+        return nullptr;
+    }
+    if (file.IsCompressed()) {
+        LOG_ERROR(Loader, "Compressed CIA files cannot be booted directly: {}", filepath);
+        return nullptr;
+    }
+
+    FileSys::CIAContainer container;
+    if (container.Load(&file) != ResultStatus::Success) {
+        LOG_ERROR(Loader, "Failed to parse CIA file {}", filepath);
+        return nullptr;
+    }
+
+    const auto& tmd = container.GetTitleMetadata();
+    const u64 title_id = tmd.GetTitleID();
+    if (title_id & Service::AM::TWL_TITLE_ID_FLAG) {
+        LOG_ERROR(Loader, "DSiWare titles cannot be executed: {}", filepath);
+        return nullptr;
+    }
+    constexpr u32 TID_HIGH_APPLICATION = 0x00040000;
+    if (static_cast<u32>(title_id >> 32) != TID_HIGH_APPLICATION) {
+        LOG_ERROR(Loader,
+                  "CIA {} is not an application (title ID {:016x}); updates and DLC are "
+                  "picked up automatically from their content folders",
+                  filepath, title_id);
+        return nullptr;
+    }
+    if (tmd.GetContentTypeByIndex(FileSys::TMDContentIndex::Main) &
+        FileSys::TMDContentTypeFlag::Encrypted) {
+        LOG_ERROR(Loader, "CIA {} has encrypted content and cannot be booted", filepath);
+        return nullptr;
+    }
+
+    const u64 content_offset = container.GetContentOffset(FileSys::TMDContentIndex::Main);
+    const u64 content_size = tmd.GetContentSizeByIndex(FileSys::TMDContentIndex::Main);
+    const std::string ncch_path =
+        FileUtil::MakeVirtualRangePath(filepath, content_offset, content_size);
+
+    FileUtil::IOFile ncch_file(ncch_path, "rb");
+    if (!ncch_file.IsOpen()) {
+        return nullptr;
+    }
+    LOG_INFO(Loader, "Booting CIA {} directly (content at 0x{:x}, size 0x{:x})", filepath,
+             content_offset, content_size);
+    return std::make_unique<AppLoader_NCCH>(system, std::move(ncch_file), ncch_path);
+}
+
 std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
     if (filename.starts_with("articbase://") || filename.starts_with("articinio://") ||
         filename.starts_with("articinin://")) {
@@ -151,14 +269,24 @@ std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
                              filename, "");
     }
 
-    FileUtil::IOFile file(filename, "rb");
+    // A zip archive boots the best bootable entry it contains, in place.
+    std::string load_path = filename;
+    if (IsZipPath(load_path)) {
+        const auto entry = FindBootableZipEntry(load_path);
+        if (!entry) {
+            return nullptr;
+        }
+        load_path = FileUtil::MakeVirtualPath(load_path, *entry);
+    }
+
+    FileUtil::IOFile file(load_path, "rb");
     if (!file.IsOpen()) {
-        LOG_ERROR(Loader, "Failed to load file {}", filename);
+        LOG_ERROR(Loader, "Failed to load file {}", load_path);
         return nullptr;
     }
 
     std::string filename_filename, filename_extension;
-    Common::SplitPath(filename, nullptr, &filename_filename, &filename_extension);
+    Common::SplitPath(load_path, nullptr, &filename_filename, &filename_extension);
 
     FileType type = IdentifyFile(file);
     FileType filename_type = GuessFromExtension(filename_extension);
@@ -166,17 +294,23 @@ std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
     if (type != filename_type) {
         // Do not show the error for CIA files, as their type cannot be determined.
         if (!(type == FileType::Unknown && filename_type == FileType::CIA)) {
-            LOG_WARNING(Loader, "File {} has a different type than its extension.", filename);
+            LOG_WARNING(Loader, "File {} has a different type than its extension.", load_path);
         }
 
         if (FileType::Unknown == type)
             type = filename_type;
     }
 
-    LOG_DEBUG(Loader, "Loading file {} as {}...", filename, GetFileTypeString(type));
+    LOG_DEBUG(Loader, "Loading file {} as {}...", load_path, GetFileTypeString(type));
 
     auto& system = Core::System::GetInstance();
-    return GetFileLoader(system, std::move(file), type, filename_filename, filename);
+
+    if (type == FileType::CIA) {
+        file.Close();
+        return GetCIADirectLoader(system, load_path);
+    }
+
+    return GetFileLoader(system, std::move(file), type, filename_filename, load_path);
 }
 
 } // namespace Loader
