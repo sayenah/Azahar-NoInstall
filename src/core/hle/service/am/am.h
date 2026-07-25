@@ -124,7 +124,11 @@ using ProgressCallback = void(std::size_t, std::size_t);
 
 class NCCHCryptoFile final {
 public:
-    NCCHCryptoFile(const std::string& out_file, bool encrypted_content);
+    // allow_compression=false forces uncompressed output regardless of the
+    // compress_cia_installs setting; the no-install decrypt cache needs raw
+    // output so decrypted partitions can be reassembled into an NCSD image.
+    NCCHCryptoFile(const std::string& out_file, bool encrypted_content,
+                   bool allow_compression = true);
 
     void Write(const u8* buffer, std::size_t length);
     bool IsError() {
@@ -417,7 +421,7 @@ ResultVal<std::pair<TitleInfo, std::unique_ptr<Loader::SMDH>>> GetCIAInfos(const
 std::optional<std::string> DecryptNCCHPartitionToCache(
     const std::string& source_path, u64 offset, u64 size,
     const std::optional<std::array<u8, 16>>& title_key, const std::array<u8, 16>& content_ctr,
-    const std::string& cache_id);
+    const std::string& cache_id, bool unique_crypto_output = true);
 
 /**
  * Resolves a CIA's content to a path NCCHContainer can load in place, for the
