@@ -88,7 +88,8 @@ public:
     std::vector<CryptoPP::CBC_Mode<CryptoPP::AES>::Decryption> content;
 };
 
-NCCHCryptoFile::NCCHCryptoFile(const std::string& out_file, bool encrypted_content) {
+NCCHCryptoFile::NCCHCryptoFile(const std::string& out_file, bool encrypted_content,
+                               bool allow_compression) {
     if (encrypted_content) {
         // A console unique crypto file is used to store the decrypted NCCH file. This is done
         // to prevent Azahar being used as a tool to download easy shareable decrypted contents
@@ -99,7 +100,7 @@ NCCHCryptoFile::NCCHCryptoFile(const std::string& out_file, bool encrypted_conte
         file = std::make_unique<FileUtil::IOFile>(out_file, "wb");
     }
 
-    if (Settings::values.compress_cia_installs) {
+    if (allow_compression && Settings::values.compress_cia_installs) {
         std::array<u8, 4> magic = {'N', 'C', 'C', 'H'};
         file = std::make_unique<FileUtil::Z3DSWriteIOFile>(
             std::move(file), magic, FileUtil::Z3DSWriteIOFile::DEFAULT_FRAME_SIZE);
@@ -413,7 +414,7 @@ void NCCHCryptoFile::Write(const u8* buffer, std::size_t length) {
 std::optional<std::string> DecryptNCCHPartitionToCache(
     const std::string& source_path, u64 offset, u64 size,
     const std::optional<std::array<u8, 16>>& title_key, const std::array<u8, 16>& content_ctr,
-    const std::string& cache_id) {
+    const std::string& cache_id, bool unique_crypto_output) {
 
     FileUtil::IOFile source(source_path, "rb");
     if (!source.IsOpen()) {
@@ -436,10 +437,13 @@ std::optional<std::string> DecryptNCCHPartitionToCache(
 
     bool ok = true;
     {
-        // The decrypted copy is stored with console-unique crypto, like installed
-        // content, so it is not a shareable plaintext dump and NCCHContainer reads
-        // it back transparently.
-        NCCHCryptoFile crypto_file(tmp_path, /*encrypted_content=*/true);
+        // Console-unique-crypto output (default) keeps the decrypted copy from
+        // being a shareable plaintext dump, and NCCHContainer reads it back
+        // transparently. Plaintext output is used when the bytes must be spliced
+        // into an assembled NCSD image (see DecryptNCSDToCache). Compression is
+        // always disabled so the output size matches the input partition.
+        NCCHCryptoFile crypto_file(tmp_path, /*encrypted_content=*/unique_crypto_output,
+                                   /*allow_compression=*/false);
         crypto_file.AuthorizeDecryption();
 
         std::optional<CryptoPP::CBC_Mode<CryptoPP::AES>::Decryption> title_key_cbc;
@@ -558,6 +562,105 @@ std::optional<std::string> PrepareCIAContentForLoad(const std::string& cia_path,
                                        std::array<u8, 16>{}, cache_id);
 }
 
+// Streams length bytes from src at its current position to dst at its current
+// position. Returns false on any short read/write.
+static bool CopyStream(FileUtil::IOFile& src, FileUtil::IOFile& dst, u64 length) {
+    constexpr std::size_t CHUNK_SIZE = 0x100000;
+    std::vector<u8> buffer(std::min<u64>(CHUNK_SIZE, std::max<u64>(length, 1)));
+    while (length > 0) {
+        const std::size_t chunk = static_cast<std::size_t>(std::min<u64>(buffer.size(), length));
+        if (src.ReadBytes(buffer.data(), chunk) != chunk ||
+            dst.WriteBytes(buffer.data(), chunk) != chunk) {
+            return false;
+        }
+        length -= chunk;
+    }
+    return true;
+}
+
+// Decrypts every encrypted partition of an NCSD (CCI/3DS) into a single
+// reassembled cache image, so the manual, download-play child and bundled
+// update partitions load in place alongside the main title. Plaintext
+// partitions are copied verbatim.
+static std::optional<std::string> DecryptNCSDToCache(const std::string& path,
+                                                     const NCSD_Header& ncsd, u64 total_size) {
+    constexpr u32 kBlockSize = 0x200;
+
+    // NCSD has no title ID field; key the cache on the media ID + size.
+    u64 media_id = 0;
+    std::memcpy(&media_id, ncsd.media_id, sizeof(media_id));
+
+    const std::string cache_dir = FileUtil::GetUserPath(FileUtil::UserPath::CacheDir) +
+                                  "extracted" DIR_SEP "decrypted" DIR_SEP;
+    const std::string dest_path = cache_dir + fmt::format("{:016x}_{:x}.cci", media_id, total_size);
+    if (FileUtil::Exists(dest_path) && FileUtil::GetSize(dest_path) == total_size) {
+        return dest_path;
+    }
+    if (!FileUtil::CreateFullPath(cache_dir)) {
+        return std::nullopt;
+    }
+    const std::string tmp_path = dest_path + ".tmp";
+
+    bool ok = true;
+    {
+        FileUtil::IOFile source(path, "rb");
+        FileUtil::IOFile out(tmp_path, "wb");
+        if (!source.IsOpen() || !out.IsOpen() || !CopyStream(source, out, total_size)) {
+            ok = false;
+        }
+    }
+
+    // Overwrite each encrypted partition in the copied image with its decrypted
+    // bytes (same size, since NCCH crypto is in-place aside from the flag flip).
+    for (std::size_t p = 0; ok && p < 8; ++p) {
+        if (ncsd.partitions[p].size == 0) {
+            continue;
+        }
+        const u64 part_offset = static_cast<u64>(ncsd.partitions[p].offset) * kBlockSize;
+        const u64 part_size = static_cast<u64>(ncsd.partitions[p].size) * kBlockSize;
+
+        NCCH_Header part_header{};
+        {
+            FileUtil::IOFile source(path, "rb");
+            if (source.ReadAtBytes(&part_header, sizeof(part_header), part_offset) !=
+                sizeof(part_header)) {
+                ok = false;
+                break;
+            }
+        }
+        if (Loader::MakeMagic('N', 'C', 'C', 'H') != part_header.magic || part_header.no_crypto) {
+            continue; // plaintext or non-NCCH partition: already copied verbatim
+        }
+
+        const auto part_plaintext = DecryptNCCHPartitionToCache(
+            path, part_offset, part_size, std::nullopt, std::array<u8, 16>{},
+            fmt::format("{:016x}_p{}.bin", media_id, p), /*unique_crypto_output=*/false);
+        if (!part_plaintext) {
+            ok = false;
+            break;
+        }
+
+        FileUtil::IOFile part(*part_plaintext, "rb");
+        FileUtil::IOFile out(tmp_path, "r+b");
+        if (!part.IsOpen() || !out.IsOpen() || !out.Seek(part_offset, SEEK_SET) ||
+            !CopyStream(part, out, part_size)) {
+            ok = false;
+        }
+        FileUtil::Delete(*part_plaintext);
+    }
+
+    if (!ok) {
+        FileUtil::Delete(tmp_path);
+        return std::nullopt;
+    }
+    if (!FileUtil::Rename(tmp_path, dest_path)) {
+        FileUtil::Delete(tmp_path);
+        return std::nullopt;
+    }
+    LOG_INFO(Service_AM, "Decrypted NCSD {} in place to cache", path);
+    return dest_path;
+}
+
 std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path) {
     constexpr u32 kBlockSize = 0x200;
 
@@ -565,38 +668,51 @@ std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path) {
     if (!file.IsOpen()) {
         return std::nullopt;
     }
+    const u64 total_size = file.GetSize();
 
-    // Locate the main NCCH partition: for an NCSD (CCI/3DS) it is partition 0;
-    // for a bare CXI it is the file itself.
-    u64 ncch_offset = 0;
-    u64 ncch_size = file.GetSize();
     NCCH_Header header{};
     if (file.ReadBytes(&header, sizeof(header)) != sizeof(header)) {
         return std::nullopt;
     }
+
+    // NCSD (CCI/3DS): decrypt all present partitions into a reassembled image so
+    // manual/download-play/update partitions come along, not just the main one.
     if (Loader::MakeMagic('N', 'C', 'S', 'D') == header.magic) {
         NCSD_Header ncsd{};
         file.Seek(0, SEEK_SET);
         if (file.ReadBytes(&ncsd, sizeof(ncsd)) != sizeof(ncsd)) {
             return std::nullopt;
         }
-        ncch_offset = static_cast<u64>(ncsd.partitions[0].offset) * kBlockSize;
-        ncch_size = static_cast<u64>(ncsd.partitions[0].size) * kBlockSize;
-        file.Seek(ncch_offset, SEEK_SET);
-        if (file.ReadBytes(&header, sizeof(header)) != sizeof(header)) {
+        // Skip decryption entirely if no partition is encrypted.
+        bool any_encrypted = false;
+        for (std::size_t p = 0; p < 8 && !any_encrypted; ++p) {
+            if (ncsd.partitions[p].size == 0) {
+                continue;
+            }
+            NCCH_Header part_header{};
+            if (file.ReadAtBytes(&part_header, sizeof(part_header),
+                                 static_cast<u64>(ncsd.partitions[p].offset) * kBlockSize) ==
+                    sizeof(part_header) &&
+                Loader::MakeMagic('N', 'C', 'C', 'H') == part_header.magic &&
+                !part_header.no_crypto) {
+                any_encrypted = true;
+            }
+        }
+        if (!any_encrypted) {
             return std::nullopt;
         }
+        file.Close();
+        return DecryptNCSDToCache(path, ncsd, total_size);
     }
 
+    // Bare CXI (single NCCH): decrypt the whole file.
     if (Loader::MakeMagic('N', 'C', 'C', 'H') != header.magic || header.no_crypto) {
-        // Not an encrypted NCCH: the caller should load the file unchanged.
         return std::nullopt;
     }
-
     const std::string cache_id =
-        fmt::format("{:016x}_{:x}.cxi", static_cast<u64>(header.program_id), ncch_size);
-    return DecryptNCCHPartitionToCache(path, ncch_offset, ncch_size, std::nullopt,
-                                       std::array<u8, 16>{}, cache_id);
+        fmt::format("{:016x}_{:x}.cxi", static_cast<u64>(header.program_id), total_size);
+    return DecryptNCCHPartitionToCache(path, 0, total_size, std::nullopt, std::array<u8, 16>{},
+                                       cache_id);
 }
 
 void AuthorizeCIAFileDecryption(CIAFile* cia_file, Kernel::HLERequestContext& ctx) {
