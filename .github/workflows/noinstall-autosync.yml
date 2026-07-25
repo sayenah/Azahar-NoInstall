@@ -77,6 +77,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/azahar-emu/azahar.git
           git fetch upstream "refs/tags/${tag}:refs/tags/${tag}"
+          # A manually prepared (e.g. conflict-resolved) branch takes
+          # precedence and is reused as-is.
+          if git ls-remote --exit-code origin "refs/heads/noinstall/${tag}" >/dev/null; then
+            echo "Branch noinstall/${tag} already exists on origin; reusing it."
+            exit 0
+          fi
           # Only the feature's own commits are applied - merging the whole
           # branch would drag along all of upstream master since the fork
           # point, which conflicts with older release tags.
