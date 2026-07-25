@@ -1,10 +1,12 @@
 name: noinstall-autosync
 
 # Watches upstream azahar-emu/azahar for new stable releases and release
-# candidates. For each new one, merges the noinstall/core feature branch onto
-# the upstream release tag, builds and tests the macOS app, and publishes a
-# "<tag>-noinstall" release on this fork. On merge conflict the job fails with
-# instructions in the run summary (GitHub emails on workflow failure).
+# candidates. For the newest unprocessed one, merges the noinstall/core
+# feature branch onto the upstream release tag, builds macOS/Windows/Android,
+# and publishes a "<tag>-noinstall" release on this fork with all artifacts.
+# Processes one release per run; if another is pending it re-dispatches
+# itself (and the daily schedule is a fallback). On merge conflict the run
+# fails with instructions in the summary (GitHub emails on workflow failure).
 
 on:
   schedule:
@@ -13,15 +15,17 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.find.outputs.matrix }}
+      tag: ${{ steps.find.outputs.tag }}
+      prerelease: ${{ steps.find.outputs.prerelease }}
       any: ${{ steps.find.outputs.any }}
     steps:
-      - name: Find new upstream releases
+      - name: Find newest unprocessed upstream release
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,92 +47,196 @@ jobs:
             fi
           fi
 
-          todo='[]'
+          echo "any=false" >> "$GITHUB_OUTPUT"
           for row in $(echo "$candidates" | jq -c '.[]'); do
             tag=$(echo "$row" | jq -r .tag)
             if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}-noinstall" >/dev/null 2>&1; then
               echo "Tag ${tag}-noinstall already exists, skipping"
-            else
-              todo=$(echo "$todo" | jq --argjson r "$row" '. + [$r]')
+              continue
             fi
+            echo "Processing: $row"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "prerelease=$(echo "$row" | jq -r .prerelease)" >> "$GITHUB_OUTPUT"
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            break
           done
 
-          echo "New releases to process: $(echo "$todo" | jq -c .)"
-          echo "matrix=$(echo "$todo" | jq -c '{include: .}')" >> "$GITHUB_OUTPUT"
-          echo "any=$(echo "$todo" | jq 'length > 0')" >> "$GITHUB_OUTPUT"
-
-  build:
+  prepare:
     needs: check
     if: ${{ needs.check.outputs.any == 'true' }}
-    runs-on: macos-26
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.check.outputs.matrix) }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          submodules: recursive
-
-      - name: Merge NoInstall onto ${{ matrix.tag }}
+      - name: Merge NoInstall onto ${{ needs.check.outputs.tag }}
         run: |
           set -euo pipefail
+          tag='${{ needs.check.outputs.tag }}'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/azahar-emu/azahar.git
-          git fetch upstream "refs/tags/${{ matrix.tag }}:refs/tags/${{ matrix.tag }}"
-          git checkout -B "noinstall/${{ matrix.tag }}" "refs/tags/${{ matrix.tag }}"
+          git fetch upstream "refs/tags/${tag}:refs/tags/${tag}"
+          git checkout -B "noinstall/${tag}" "refs/tags/${tag}"
           if ! git merge --no-edit origin/noinstall/core; then
             {
-              echo "## Merge conflict for ${{ matrix.tag }}"
+              echo "## Merge conflict for ${tag}"
               echo ""
-              echo "noinstall/core no longer merges cleanly onto upstream tag ${{ matrix.tag }}."
+              echo "noinstall/core no longer merges cleanly onto upstream tag ${tag}."
               echo "Resolve locally, then push the result:"
               echo ""
               echo '```'
               echo "git fetch upstream --tags"
-              echo "git checkout -b noinstall/${{ matrix.tag }} ${{ matrix.tag }}"
+              echo "git checkout -b noinstall/${tag} ${tag}"
               echo "git merge noinstall/core   # fix conflicts, commit"
-              echo "git tag ${{ matrix.tag }}-noinstall"
-              echo "git push origin noinstall/${{ matrix.tag }} ${{ matrix.tag }}-noinstall"
+              echo "git push -f origin noinstall/${tag}"
+              echo "# then re-run this workflow"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          git submodule update --init --recursive
+          git push -f origin "noinstall/${tag}"
 
+  macos:
+    needs: [check, prepare]
+    runs-on: macos-26
+    env:
+      OS: macos
+      TARGET: arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: noinstall/${{ needs.check.outputs.tag }}
+          submodules: recursive
       - name: Install tools
         run: brew install ccache ninja spirv-tools
-
       - name: Build and test
         run: BUILD_ARCH=arm64 ./.ci/macos.sh
-
-      - name: Pack app
-        run: >
-          ditto -c -k --sequesterRsrc --keepParent build/arm64/bundle/Azahar.app
-          "azahar-${{ matrix.tag }}-noinstall-macos-arm64.zip"
-
-      - name: Push branch and tag
+      - name: Pack
         run: |
-          git tag "${{ matrix.tag }}-noinstall"
-          git push origin "noinstall/${{ matrix.tag }}" "refs/tags/${{ matrix.tag }}-noinstall"
+          mkdir -p build/bundle
+          mv build/arm64/bundle/Azahar.app build/bundle/
+          ./.ci/pack.sh
+          cd artifacts
+          for f in *; do mv "$f" "azahar-${{ needs.check.outputs.tag }}-noinstall-macos-arm64.${f##*.}"; done
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: artifacts/
 
-      - name: Publish release
+  windows:
+    needs: [check, prepare]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash {0}
+    env:
+      OS: windows
+      TARGET: msvc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: noinstall/${{ needs.check.outputs.tag }}
+          submodules: recursive
+      - name: Set up MSVC
+        uses: azahar-emu/msvc-dev-cmd@v1
+      - name: Install extra tools
+        run: choco install ccache ninja ptime wget
+        shell: pwsh
+      - name: Install vulkan-sdk
+        run: |
+          wget https://sdk.lunarg.com/sdk/download/1.4.304.1/windows/VulkanSDK-1.4.304.1-Installer.exe -O D:/a/_temp/vulkan.exe
+          D:/a/_temp/vulkan.exe --accept-licenses --default-answer --confirm-command install
+        shell: pwsh
+      - name: Disable line ending translation
+        run: git config --global core.autocrlf input
+      - name: Build
+        run: ./.ci/windows.sh
+      - name: Pack
+        run: |
+          ./.ci/pack.sh
+          cd artifacts
+          for f in *; do mv "$f" "azahar-${{ needs.check.outputs.tag }}-noinstall-windows-msvc.${f##*.}"; done
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: artifacts/
+
+  android:
+    needs: [check, prepare]
+    runs-on: ubuntu-latest
+    env:
+      OS: android
+      TARGET: vanilla
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: noinstall/${{ needs.check.outputs.tag }}
+          submodules: recursive
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install ccache apksigner -y
+      - name: Update Android SDK CMake version
+        run: |
+          echo "y" | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager "cmake;3.30.3"
+      - name: Build
+        run: JAVA_HOME=$JAVA_HOME_17_X64 ./.ci/android.sh
+      - name: Pack
+        run: |
+          UNPACKED=1 ../../../.ci/pack.sh
+          cd artifacts
+          for f in *; do mv "$f" "azahar-${{ needs.check.outputs.tag }}-noinstall-android.${f##*.}"; done
+        working-directory: src/android/app
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-android
+          path: src/android/app/artifacts/
+
+  publish:
+    needs: [check, prepare, macos, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: noinstall/${{ needs.check.outputs.tag }}
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist/
+      - name: Tag and publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          tag='${{ needs.check.outputs.tag }}'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${tag}-noinstall"
+          git push origin "refs/tags/${tag}-noinstall"
           {
-            echo "Automated build of upstream [Azahar ${{ matrix.tag }}](https://github.com/azahar-emu/azahar/releases/tag/${{ matrix.tag }}) with the NoInstall feature (branch \`noinstall/core\`) merged on top."
+            echo "Automated build of upstream [Azahar ${tag}](https://github.com/azahar-emu/azahar/releases/tag/${tag}) with the NoInstall feature (branch \`noinstall/core\`) merged on top."
             echo ""
-            echo "The macOS app is unsigned: after unzipping, run \`xattr -cr Azahar.app\` once before first launch."
+            echo "- **macOS** (Apple Silicon): unsigned - after unzipping, run \`xattr -cr Azahar.app\` once before first launch."
+            echo "- **Windows** (x64, MSVC build)."
+            echo "- **Android**: debug-signed APK/AAB (sideload the APK; uninstall differently-signed Azahar variants first)."
           } > release-notes.md
           prerelease_flag=""
-          if [ "${{ matrix.prerelease }}" = "true" ]; then
+          if [ '${{ needs.check.outputs.prerelease }}' = "true" ]; then
             prerelease_flag="--prerelease"
           fi
-          gh release create "${{ matrix.tag }}-noinstall" \
-            --title "Azahar ${{ matrix.tag }} + NoInstall" \
+          gh release create "${tag}-noinstall" \
+            --title "Azahar ${tag} + NoInstall" \
             --notes-file release-notes.md \
             $prerelease_flag \
-            "azahar-${{ matrix.tag }}-noinstall-macos-arm64.zip"
+            dist/*
+      - name: Re-dispatch if more releases are pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run noinstall-autosync -R "${GITHUB_REPOSITORY}" || true
