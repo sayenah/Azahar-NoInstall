@@ -512,6 +512,8 @@ if (ENABLE_VULKAN)
     endif()
 endif()
 
+add_subdirectory(miniz EXCLUDE_FROM_ALL)
+
 set(XXHASH_BUILD_XXHSUM OFF)
 add_subdirectory(xxHash/cmake_unofficial EXCLUDE_FROM_ALL)
 target_compile_definitions(xxhash PRIVATE XXH_FORCE_MEMORY_ACCESS=2)

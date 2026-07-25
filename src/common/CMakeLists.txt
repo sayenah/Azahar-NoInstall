@@ -99,6 +99,8 @@ add_library(citra_common STATIC EXCLUDE_FROM_ALL
     timer.h
     unique_function.h
     vector_math.h
+    virtual_container.cpp
+    virtual_container.h
     web_util.cpp
     web_util.h
     x64/cpu_detect.cpp
@@ -155,7 +157,7 @@ endif()
 create_target_directory_groups(citra_common)
 
 target_link_libraries(citra_common PUBLIC fmt library-headers microprofile Boost::boost Boost::serialization Boost::iostreams)
-target_link_libraries(citra_common PRIVATE cryptopp zstd)
+target_link_libraries(citra_common PRIVATE cryptopp zstd miniz)
 
 if ("x86_64" IN_LIST ARCHITECTURE)
     target_link_libraries(citra_common PRIVATE xbyak)

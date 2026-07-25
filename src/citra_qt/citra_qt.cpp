@@ -1471,16 +1471,27 @@ void GMainWindow::BootGame(const QString& filename) {
                           filename.startsWith(QString::fromStdString("articinio:/")) ||
                           filename.startsWith(QString::fromStdString("articinin:/"));
 
-    if (!is_artic && filename.endsWith(QStringLiteral(".cia"))) {
-        const auto answer = QMessageBox::question(
-            this, tr("CIA must be installed before usage"),
-            tr("Before using this CIA, you must install it. Do you want to install it now?"),
-            QMessageBox::Yes | QMessageBox::No);
+    if (!is_artic && filename.endsWith(QStringLiteral(".cia"), Qt::CaseInsensitive)) {
+        // Application CIAs boot directly without installation. Anything else
+        // (updates, DLC, DSiWare, system titles) is not bootable; it is served
+        // in place from the configured content folders instead.
+        constexpr u32 TID_HIGH_APPLICATION = 0x00040000;
+        const auto infos = Service::AM::GetCIAInfos(filename.toStdString());
+        const u64 title_id = infos.Succeeded() ? infos.Unwrap().first.tid : 0;
+        if (static_cast<u32>(title_id >> 32) != TID_HIGH_APPLICATION) {
+            const auto answer = QMessageBox::question(
+                this, tr("Not a bootable title"),
+                tr("This CIA is not a bootable application (it is an update, DLC, DSiWare or "
+                   "system title). It does not need to be installed: place it in the matching "
+                   "content folder and it will be used automatically.<br><br>Do you want to "
+                   "install it into the emulated console anyway?"),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
 
-        if (answer == QMessageBox::Yes)
-            InstallCIA(QStringList(filename));
+            if (answer == QMessageBox::Yes)
+                InstallCIA(QStringList(filename));
 
-        return;
+            return;
+        }
     }
 
     show_artic_label = is_artic;
