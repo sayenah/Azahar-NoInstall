@@ -51,6 +51,11 @@ std::optional<std::vector<u8>> ReadZipEntryPrefix(const std::string& zip_path,
                                                   const std::string& entry_name,
                                                   std::size_t max_bytes);
 
+/// Deletes every file extracted from compressed zip entries. Safe to call
+/// whenever no emulation session is running; entries are re-extracted on
+/// demand the next time they are needed.
+void ClearExtractionCache();
+
 /// Builds a virtual path from a container path and an inner segment.
 std::string MakeVirtualPath(const std::string& container, const std::string& entry);
 
