@@ -1,0 +1,134 @@
+name: noinstall-autosync
+
+# Watches upstream azahar-emu/azahar for new stable releases and release
+# candidates. For each new one, merges the noinstall/core feature branch onto
+# the upstream release tag, builds and tests the macOS app, and publishes a
+# "<tag>-noinstall" release on this fork. On merge conflict the job fails with
+# instructions in the run summary (GitHub emails on workflow failure).
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find.outputs.matrix }}
+      any: ${{ steps.find.outputs.any }}
+    steps:
+      - name: Find new upstream releases
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          releases=$(gh api 'repos/azahar-emu/azahar/releases?per_page=20')
+          stable=$(echo "$releases" | jq '[.[] | select(.prerelease == false and .draft == false)] | first')
+          rc=$(echo "$releases" | jq '[.[] | select(.prerelease == true and .draft == false)] | first')
+
+          candidates='[]'
+          if [ "$(echo "$stable" | jq -r 'type')" = "object" ]; then
+            candidates=$(echo "$candidates" | jq --argjson r "$stable" '. + [{tag: $r.tag_name, prerelease: false}]')
+          fi
+          if [ "$(echo "$rc" | jq -r 'type')" = "object" ]; then
+            # Only consider an RC that is newer than the latest stable release
+            newer=$(jq -n --argjson s "$stable" --argjson r "$rc" '($s | type) != "object" or ($r.published_at > $s.published_at)')
+            if [ "$newer" = "true" ]; then
+              candidates=$(echo "$candidates" | jq --argjson r "$rc" '. + [{tag: $r.tag_name, prerelease: true}]')
+            fi
+          fi
+
+          todo='[]'
+          for row in $(echo "$candidates" | jq -c '.[]'); do
+            tag=$(echo "$row" | jq -r .tag)
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}-noinstall" >/dev/null 2>&1; then
+              echo "Tag ${tag}-noinstall already exists, skipping"
+            else
+              todo=$(echo "$todo" | jq --argjson r "$row" '. + [$r]')
+            fi
+          done
+
+          echo "New releases to process: $(echo "$todo" | jq -c .)"
+          echo "matrix=$(echo "$todo" | jq -c '{include: .}')" >> "$GITHUB_OUTPUT"
+          echo "any=$(echo "$todo" | jq 'length > 0')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: ${{ needs.check.outputs.any == 'true' }}
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Merge NoInstall onto ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/azahar-emu/azahar.git
+          git fetch upstream "refs/tags/${{ matrix.tag }}:refs/tags/${{ matrix.tag }}"
+          git checkout -B "noinstall/${{ matrix.tag }}" "refs/tags/${{ matrix.tag }}"
+          if ! git merge --no-edit origin/noinstall/core; then
+            {
+              echo "## Merge conflict for ${{ matrix.tag }}"
+              echo ""
+              echo "noinstall/core no longer merges cleanly onto upstream tag ${{ matrix.tag }}."
+              echo "Resolve locally, then push the result:"
+              echo ""
+              echo '```'
+              echo "git fetch upstream --tags"
+              echo "git checkout -b noinstall/${{ matrix.tag }} ${{ matrix.tag }}"
+              echo "git merge noinstall/core   # fix conflicts, commit"
+              echo "git tag ${{ matrix.tag }}-noinstall"
+              echo "git push origin noinstall/${{ matrix.tag }} ${{ matrix.tag }}-noinstall"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          git submodule update --init --recursive
+
+      - name: Install tools
+        run: brew install ccache ninja spirv-tools
+
+      - name: Build and test
+        run: BUILD_ARCH=arm64 ./.ci/macos.sh
+
+      - name: Pack app
+        run: >
+          ditto -c -k --sequesterRsrc --keepParent build/arm64/bundle/Azahar.app
+          "azahar-${{ matrix.tag }}-noinstall-macos-arm64.zip"
+
+      - name: Push branch and tag
+        run: |
+          git tag "${{ matrix.tag }}-noinstall"
+          git push origin "noinstall/${{ matrix.tag }}" "refs/tags/${{ matrix.tag }}-noinstall"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Automated build of upstream [Azahar ${{ matrix.tag }}](https://github.com/azahar-emu/azahar/releases/tag/${{ matrix.tag }}) with the NoInstall feature (branch \`noinstall/core\`) merged on top."
+            echo ""
+            echo "The macOS app is unsigned: after unzipping, run \`xattr -cr Azahar.app\` once before first launch."
+          } > release-notes.md
+          prerelease_flag=""
+          if [ "${{ matrix.prerelease }}" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "${{ matrix.tag }}-noinstall" \
+            --title "Azahar ${{ matrix.tag }} + NoInstall" \
+            --notes-file release-notes.md \
+            $prerelease_flag \
+            "azahar-${{ matrix.tag }}-noinstall-macos-arm64.zip"
