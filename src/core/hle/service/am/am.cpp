@@ -553,7 +553,7 @@ std::optional<std::string> PrepareCIAContentForLoad(const std::string& cia_path,
     if (file.ReadBytes(&ncch_header, sizeof(ncch_header)) != sizeof(ncch_header)) {
         return std::nullopt;
     }
-    const bool is_ncch = Loader::MakeMagic('N', 'C', 'C', 'H') == ncch_header.magic;
+    const bool is_ncch = FileUtil::MakeMagic('N', 'C', 'C', 'H') == ncch_header.magic;
     if (!is_ncch || ncch_header.no_crypto) {
         // Already plaintext (or a non-NCCH SRL, e.g. DSiWare): serve in place.
         return FileUtil::MakeVirtualRangePath(cia_path, content_offset, content_size);
@@ -628,7 +628,7 @@ static std::optional<std::string> DecryptNCSDToCache(const std::string& path,
                 break;
             }
         }
-        if (Loader::MakeMagic('N', 'C', 'C', 'H') != part_header.magic || part_header.no_crypto) {
+        if (FileUtil::MakeMagic('N', 'C', 'C', 'H') != part_header.magic || part_header.no_crypto) {
             continue; // plaintext or non-NCCH partition: already copied verbatim
         }
 
@@ -677,7 +677,7 @@ std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path) {
 
     // NCSD (CCI/3DS): decrypt all present partitions into a reassembled image so
     // manual/download-play/update partitions come along, not just the main one.
-    if (Loader::MakeMagic('N', 'C', 'S', 'D') == header.magic) {
+    if (FileUtil::MakeMagic('N', 'C', 'S', 'D') == header.magic) {
         NCSD_Header ncsd{};
         file.Seek(0, SEEK_SET);
         if (file.ReadBytes(&ncsd, sizeof(ncsd)) != sizeof(ncsd)) {
@@ -693,7 +693,7 @@ std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path) {
             if (file.ReadAtBytes(&part_header, sizeof(part_header),
                                  static_cast<u64>(ncsd.partitions[p].offset) * kBlockSize) ==
                     sizeof(part_header) &&
-                Loader::MakeMagic('N', 'C', 'C', 'H') == part_header.magic &&
+                FileUtil::MakeMagic('N', 'C', 'C', 'H') == part_header.magic &&
                 !part_header.no_crypto) {
                 any_encrypted = true;
             }
@@ -706,7 +706,7 @@ std::optional<std::string> PrepareEncryptedRomForLoad(const std::string& path) {
     }
 
     // Bare CXI (single NCCH): decrypt the whole file.
-    if (Loader::MakeMagic('N', 'C', 'C', 'H') != header.magic || header.no_crypto) {
+    if (FileUtil::MakeMagic('N', 'C', 'C', 'H') != header.magic || header.no_crypto) {
         return std::nullopt;
     }
     const std::string cache_id =
