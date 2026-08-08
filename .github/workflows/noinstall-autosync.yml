@@ -86,23 +86,135 @@ jobs:
           # Only the feature's own commits are applied - merging the whole
           # branch would drag along all of upstream master since the fork
           # point, which conflicts with older release tags.
+          #
+          # "--not refs/tags/${tag}" additionally drops anything the release
+          # tag already contains. Without it a stale origin/master (one that
+          # does not yet contain ${tag}) drags the merge-base backwards and
+          # the range silently fills up with hundreds of upstream commits.
           base=$(git merge-base origin/master origin/noinstall/core)
-          commits=$(git rev-list --reverse "${base}..origin/noinstall/core")
+          commits=$(git rev-list --reverse "${base}..origin/noinstall/core" --not "refs/tags/${tag}")
+          stale=$(( $(git rev-list --count "${base}..origin/noinstall/core") \
+                    - $(git rev-list --count "${base}..origin/noinstall/core" --not "refs/tags/${tag}") ))
+          if [ "${stale}" -gt 0 ]; then
+            {
+              echo "### :warning: origin/master is stale"
+              echo ""
+              echo "${stale} upstream commit(s) were filtered out of the cherry-pick range."
+              echo "This run is unaffected, but fix the anchor so the merge-base moves forward:"
+              echo ""
+              echo '```'
+              echo "git checkout master && git merge upstream/master && git push origin master"
+              echo '```'
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           git checkout -B "noinstall/${tag}" "refs/tags/${tag}"
           if ! git cherry-pick ${commits}; then
+            conflicts=$(git diff --name-only --diff-filter=U || true)
             {
               echo "## Cherry-pick conflict for ${tag}"
               echo ""
               echo "The NoInstall commits no longer apply cleanly onto upstream tag ${tag}."
-              echo "Resolve locally, then push the result:"
+              echo ""
+              echo "**Conflicting files:**"
+              echo ""
+              echo '```'
+              echo "${conflicts}"
+              echo '```'
+              echo ""
+              echo "### :warning: A clean cherry-pick does NOT mean it builds"
+              echo ""
+              echo "When upstream deletes or moves an API, call sites that neither side"
+              echo "edited keep naming the old symbol. Git reports no conflict, and the"
+              echo "build only fails later - here in CI, one platform at a time. The"
+              echo "2126.0-rc5 sync had one visible conflict in file_util.cpp and seven"
+              echo "silent breaks across three further files. **Build before you push.**"
+              echo ""
+              echo "### Option A - rebase the feature branch (preferred)"
+              echo ""
+              echo "Use this whenever upstream refactored: it fixes every future release,"
+              echo "not just this one."
+              echo ""
+              echo '```'
+              echo "git fetch upstream --tags"
+              echo "git checkout master && git merge upstream/master && git push origin master"
+              echo "git checkout noinstall/core"
+              echo "git rebase --onto ${tag} ${base}"
+              echo "#   ...resolve conflicts, then BUILD AND TEST (see below)..."
+              echo "git push --force-with-lease origin noinstall/core"
+              echo '```'
+              echo ""
+              echo "Afterwards this must print the commit that ${tag} points at:"
+              echo ""
+              echo '```'
+              echo "git merge-base origin/master origin/noinstall/core"
+              echo '```'
+              echo ""
+              echo "### Option B - prepare this one release by hand"
+              echo ""
+              echo "Leaves noinstall/core broken for the next release, so prefer Option A."
               echo ""
               echo '```'
               echo "git fetch upstream --tags"
               echo "git checkout -b noinstall/${tag} ${tag}"
               echo "git cherry-pick ${base}..noinstall/core   # fix conflicts as prompted"
+              echo "#   ...BUILD AND TEST (see below)..."
               echo "git push -f origin noinstall/${tag}"
-              echo "# then re-run this workflow"
               echo '```'
+              echo ""
+              echo "This workflow reuses an existing noinstall/${tag} branch as-is."
+              echo ""
+              echo "### Required before pushing, either way"
+              echo ""
+              echo "Full recipe in \`docs/NOINSTALL.md\` section 4. Minimum:"
+              echo ""
+              echo '```'
+              echo "git submodule update --init --recursive"
+              echo "mkdir -p build/dev && cd build/dev"
+              echo "cmake ../.. -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo \\"
+              echo "  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+              echo "ninja"
+              echo "./bin/RelWithDebInfo/tests"
+              echo '```'
+              echo ""
+              echo "Warnings are errors, and MSVC flags things clang does not - a green"
+              echo "local build still leaves the Windows job as the real gate."
+              echo ""
+              echo "### Finding the silent breaks"
+              echo ""
+              echo "Upstream breaks callers in two ways, so there are two greps. Neither"
+              echo "replaces building - they only tell you where to look first."
+              echo ""
+              echo "**1. Qualified names that moved.** This is what caught"
+              echo "\`Loader::MakeMagic\` -> \`FileUtil::MakeMagic\` in the 2126.0-rc5 sync."
+              echo "Names your own commits introduce are listed too; ignore those."
+              echo ""
+              echo '```'
+              echo "tag=${tag}"
+              echo 'git diff "$tag" HEAD | grep "^+" \'
+              echo '  | grep -oE "[A-Z][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*" | sort -u \'
+              echo '  | while read -r q; do'
+              echo '      git grep -q "$q" "$tag" -- src/ || echo "GONE UPSTREAM: $q"'
+              echo '    done'
+              echo '```'
+              echo ""
+              echo "**2. Member functions that were deleted.** A member call is not a"
+              echo "qualified name, so grep 1 cannot see it. This is what caught"
+              echo "\`IOFile::IsCompressed()\`. Note there is no \`\\b\` in the regex -"
+              echo "git grep's ERE does not support it and silently matches almost nothing."
+              echo ""
+              echo '```'
+              echo "base=${base}"
+              echo "tag=${tag}"
+              echo 'git grep -hoE "[A-Za-z_][A-Za-z0-9_]*\(" "$base" -- "*.h" | tr -d "(" | sort -u > /tmp/old'
+              echo 'git grep -hoE "[A-Za-z_][A-Za-z0-9_]*\(" "$tag"  -- "*.h" | tr -d "(" | sort -u > /tmp/new'
+              echo 'git diff "$tag" HEAD | grep "^+" > /tmp/added'
+              echo 'comm -23 /tmp/old /tmp/new | while read -r m; do'
+              echo '  grep -qE "[.>]${m}\(" /tmp/added && echo "GONE UPSTREAM (member): $m"'
+              echo 'done'
+              echo '```'
+              echo ""
+              echo "Then re-run this workflow."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
