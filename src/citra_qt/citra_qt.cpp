@@ -234,7 +234,8 @@ void GMainWindow::ShowCommandOutput(std::string title, std::string message) {
 bool IsPrereleaseBuild() {
     return ((strstr(Common::g_build_fullname, "alpha") != NULL) ||
             (strstr(Common::g_build_fullname, "beta") != NULL) ||
-            (strstr(Common::g_build_fullname, "rc") != NULL));
+            (strstr(Common::g_build_fullname, "rc") != NULL) ||
+            (strstr(Common::g_build_fullname, "test") != NULL));
 }
 
 #ifdef ENABLE_QT_UPDATE_CHECKER
@@ -2353,8 +2354,8 @@ void GMainWindow::OnMenuSetUpSystemFiles() {
 
     QRadioButton radio1(&dialog);
     QRadioButton radio2(&dialog);
-    QString new3dsSetupString = tr("Old 3DS setup");
-    QString old3dsSetupString = tr("New 3DS setup");
+    QString new3dsSetupString = tr("New 3DS setup");
+    QString old3dsSetupString = tr("Old 3DS setup");
     QString availableIcon = QStringLiteral("(\u2139\uFE0F) ");
     QString unavailableIcon = QStringLiteral("(\u26A0) ");
     QString installedIcon = QStringLiteral("(\u2705) ");
