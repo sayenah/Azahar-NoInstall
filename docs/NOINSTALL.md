@@ -41,7 +41,7 @@ Decryption is a cross-cutting concern used by layers 2 and 3.
 | Branch / tag | Purpose |
 |---|---|
 | `noinstall/core` | **The default branch** and source of truth. All NoInstall commits live here, based on the fork point of `master`. Also carries the autosync workflow (GitHub reads scheduled workflows from the default branch). This is what visitors and clones get, and what the front-page README comes from. |
-| `master` | The upstream-anchor. Shares history with `noinstall/core` at the fork point so the autosync can compute `merge-base(master, noinstall/core)` to isolate the feature commits. It does **not** need to advance to newer upstream (the autosync fetches upstream tags directly). Don't put feature code here. |
+| `master` | The upstream-anchor. Shares history with `noinstall/core` so the autosync can compute `merge-base(master, noinstall/core)` to isolate the feature commits. It **must contain the release tag `noinstall/core` is based on** — see the warning below. Don't put feature code here. |
 | `noinstall/<tag>` | A backport of the feature onto a specific upstream release tag (e.g. `noinstall/2125.1.3`). Produced by the autosync workflow (cherry-pick) or by hand when conflicts need resolving. The autosync workflow file is cherry-picked onto these too but is inert there (no `push` trigger). |
 | `<tag>-noinstall` (tag) | Marks a published release built from `noinstall/<tag>`. |
 
@@ -61,6 +61,53 @@ release per run and re-dispatches itself if another is pending.
 > The workflow **cherry-picks the feature commits** (`merge-base(master,
 > noinstall/core)..noinstall/core`), it does **not** merge the whole branch —
 > merging would drag all of master's history onto an older tag and conflict.
+
+### 2.1 Keeping `master` in step with `noinstall/core`
+
+The cherry-pick range is `merge-base(master, noinstall/core)..noinstall/core`.
+That base is only the intended one while `master` contains whatever release tag
+`noinstall/core` sits on. Rebase `noinstall/core` onto a newer tag without
+advancing `master` and the merge-base falls back to the *old* fork point, so the
+range silently fills with hundreds of upstream commits which are then replayed
+onto the tag.
+
+So after any rebase of `noinstall/core`, do both, `master` first:
+
+```bash
+git checkout master && git merge upstream/master && git push origin master
+git push --force-with-lease origin noinstall/core
+# verify — must print the commit the target tag points at:
+git merge-base origin/master origin/noinstall/core
+```
+
+The workflow now defends itself against this (it filters commits already
+contained in the target tag and warns in the run summary), but the merge-base
+should still be correct — the guard is a safety net, not the design.
+
+### 2.2 When upstream refactors: a clean cherry-pick is not a passing build
+
+This is the failure mode that broke autosync for ten days in Aug 2026, when
+upstream restructured `IOFile` into an `IOFileBase` hierarchy
+([azahar-emu/azahar#2352](https://github.com/azahar-emu/azahar/pull/2352)).
+
+Git only conflicts where **both** sides edited the same lines. When upstream
+deletes or moves an API, call sites that neither side touched keep naming the
+old symbol: no conflict, and the failure surfaces only at compile time. That
+sync produced **one** visible conflict in `file_util.cpp` and **seven** silent
+breaks across three other files — `IOFile::IsCompressed()` (deleted, replaced by
+`GetType().HasCompressedType()`) and five `Loader::MakeMagic` calls (moved to
+`FileUtil::MakeMagic`).
+
+Consequences worth internalising:
+
+- **Never push a conflict resolution you have not built.** CI will find these,
+  but one platform at a time, tens of minutes apart.
+- **Prefer rebasing `noinstall/core` over per-tag fixes when upstream
+  refactored.** A hand-prepared `noinstall/<tag>` branch fixes one release and
+  leaves `noinstall/core` broken for the next one.
+- The run summary on a cherry-pick conflict prints both the recovery procedure
+  and two greps that locate silently-broken call sites. Neither grep replaces
+  building; they only say where to look first.
 
 ---
 
@@ -218,6 +265,11 @@ Windows build even when macOS/Linux pass.
   gitlinks. Always `git diff --cached --stat` before committing; a stray
   `externals/...` `mode 160000` line means unstage it (`git rm --cached`) — it
   would break every cherry-pick. Prefer staging explicit paths.
+- **`git grep -E` does not support `\b`.** Word-boundary escapes are a GNU
+  extension; git's ERE engine treats `\b` as a literal, so a pattern like
+  `\b[A-Za-z_]*\(` matches almost nothing and returns quietly. An API sweep
+  written that way looks clean when it isn't — it reported 371 header symbols
+  instead of 6710. Use `[A-Za-z_][A-Za-z0-9_]*\(` and sanity-check the count.
 - **MSVC / cryptopp on old tags.** Some release tags pin a cryptopp revision
   that no longer builds with the current MSVC STL
   (`stdext::make_checked_array_iterator` was removed). Fix on the backport
