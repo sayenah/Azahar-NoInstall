@@ -69,7 +69,7 @@ std::optional<std::vector<u8>> ReadCandidatePrefix(const Candidate& candidate,
         return FileUtil::ReadZipEntryPrefix(candidate.zip_path, candidate.entry_name, max_bytes);
     }
     FileUtil::IOFile file(candidate.cia_path, "rb");
-    if (!file.IsOpen() || file.IsCompressed()) {
+    if (!file.IsOpen() || file.GetType().HasCompressedType()) {
         return std::nullopt;
     }
     std::vector<u8> buffer(std::min<std::size_t>(max_bytes, file.GetSize()));

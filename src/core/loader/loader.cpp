@@ -219,7 +219,7 @@ static std::unique_ptr<AppLoader> GetCIADirectLoader(Core::System& system,
     if (!file.IsOpen()) {
         return nullptr;
     }
-    if (file.IsCompressed()) {
+    if (file.GetType().HasCompressedType()) {
         LOG_ERROR(Loader, "Compressed CIA files cannot be booted directly: {}", filepath);
         return nullptr;
     }

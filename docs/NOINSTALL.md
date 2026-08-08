@@ -77,7 +77,7 @@ Pack.zip#Update.cia#0x40:0x8      → a byte range within a zip entry
 ```
 
 - Resolution happens inside `FileUtil::IOFile` (`src/common/file_util.cpp`):
-  `Open()`, `Exists()`, `GetSize()`, `ReadImpl`/`ReadAtImpl`/`SeekImpl`/`TellImpl`
+  `Open()`, `Exists()`, `GetSize()`, `ReadImpl`/`ReadAtImpl`/`Seek`/`Tell`
   all understand virtual paths and present a read-only window into the resolved
   host file. Writes to a virtual path are refused.
 - **Stored** (uncompressed) zip entries resolve to a direct byte-range of the
