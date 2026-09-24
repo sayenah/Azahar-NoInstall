@@ -1,4 +1,4 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2023-2026 Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -323,6 +323,13 @@ object NativeLibrary {
                 title = emulationActivity.getString(R.string.fatal_error)
                 message = emulationActivity.getString(R.string.fatal_error_message)
                 canContinue = false
+            }
+
+            CoreError.ErrorSavestateBuildMismatch -> {
+                title = emulationActivity.getString(R.string.core_error_savestate_build_mismatch)
+                message =
+                    emulationActivity.getString(R.string.savestate_build_mismatch_message, details)
+                canContinue = true
             }
 
             CoreError.ErrorUnknown -> {
@@ -958,7 +965,7 @@ object NativeLibrary {
         ErrorArticDisconnected(12, R.string.core_error_artic_disconnected),
         ErrorN3DSApplication(13, R.string.core_error_n3ds_application),
         ErrorCoreExceptionRaised(14, R.string.core_error_core_exception_raised),
-        ErrorMemoryExceptionRaised(15, R.string.core_error_memory_exception_raised),
+        ErrorSavestateBuildMismatch(15, R.string.core_error_savestate_build_mismatch),
         ShutdownRequested(16, R.string.core_error_shutdown_requested),
         ErrorUnknown(17, R.string.core_error_unknown);
 
@@ -985,7 +992,12 @@ object NativeLibrary {
             val canContinue = requireArguments().getBoolean(CAN_CONTINUE)
             val dialog = MaterialAlertDialogBuilder(requireContext())
                 .setTitle(title)
-                .setMessage(message)
+                .setMessage(
+                    Html.fromHtml(
+                        message,
+                        Html.FROM_HTML_MODE_LEGACY
+                    )
+                )
             if (canContinue) {
                 dialog.setPositiveButton(R.string.continue_button) { _: DialogInterface?, _: Int ->
                     coreErrorAlertResult = true
@@ -996,7 +1008,11 @@ object NativeLibrary {
                 coreErrorAlertResult = false
                 userChosen = true
             }
-            return dialog.show()
+            val alert = dialog.create()
+            alert.show()
+            val alertMessage = alert.findViewById<View>(android.R.id.message) as TextView
+            alertMessage.movementMethod = LinkMovementMethod.getInstance()
+            return alert
         }
 
         override fun onDismiss(dialog: DialogInterface) {
