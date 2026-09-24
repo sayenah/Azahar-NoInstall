@@ -105,9 +105,15 @@ Consequences worth internalising:
 - **Prefer rebasing `noinstall/core` over per-tag fixes when upstream
   refactored.** A hand-prepared `noinstall/<tag>` branch fixes one release and
   leaves `noinstall/core` broken for the next one.
-- The run summary on a cherry-pick conflict prints both the recovery procedure
-  and two greps that locate silently-broken call sites. Neither grep replaces
-  building; they only say where to look first.
+- On a cherry-pick conflict the run does **not** fail. It skips the builds and
+  opens one issue per release (label `autosync-conflict`, @-mentioning the repo
+  owner); later runs refresh that issue's body without notifying again. The
+  issue — and the run summary — carry the recovery procedure and two greps that
+  locate silently-broken call sites. Neither grep replaces building; they only
+  say where to look first. The issue closes itself once the release applies
+  cleanly, or once a newer release supersedes it. Issues must be enabled on the
+  fork; if they are not, opening the issue fails and the run goes red instead.
+- A **build** failure after a clean cherry-pick still fails the run.
 
 ---
 

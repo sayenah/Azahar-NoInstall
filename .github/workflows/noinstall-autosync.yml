@@ -5,8 +5,12 @@ name: noinstall-autosync
 # feature branch onto the upstream release tag, builds macOS/Windows/Android,
 # and publishes a "<tag>-noinstall" release on this fork with all artifacts.
 # Processes one release per run; if another is pending it re-dispatches
-# itself (and the daily schedule is a fallback). On merge conflict the run
-# fails with instructions in the summary (GitHub emails on workflow failure).
+# itself (and the daily schedule is a fallback). On cherry-pick conflict the
+# run skips the builds and opens (or quietly updates) one issue per release,
+# labelled autosync-conflict, with the recovery steps - it does not fail, so a
+# stuck release does not produce a red run and a failure email every day. The
+# issue closes itself once the release applies cleanly or a newer release
+# supersedes it.
 
 on:
   schedule:
@@ -16,6 +20,7 @@ on:
 permissions:
   contents: write
   actions: write
+  issues: write
 
 jobs:
   check:
@@ -60,16 +65,35 @@ jobs:
             echo "any=true" >> "$GITHUB_OUTPUT"
             break
           done
+      - name: Close conflict issues for releases no longer pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PENDING: ${{ steps.find.outputs.tag }}
+        run: |
+          set -uo pipefail
+          # An issue is for the tag at the end of its title. Anything other than
+          # the release this run is working on has been published or superseded.
+          gh issue list -R "${GITHUB_REPOSITORY}" --label autosync-conflict --state open \
+              --json number,title --jq '.[] | "\(.number) \(.title)"' 2>/dev/null |
+            while read -r number title; do
+              tag="${title##* }"
+              [ "${tag}" = "${PENDING}" ] && continue
+              gh issue close "${number}" -R "${GITHUB_REPOSITORY}" \
+                --comment "Closing: ${tag} is no longer the pending release (published or superseded). Checked by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+            done
 
   prepare:
     needs: check
     if: ${{ needs.check.outputs.any == 'true' }}
     runs-on: ubuntu-latest
+    outputs:
+      conflict: ${{ steps.apply.outputs.conflict }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Apply NoInstall commits onto ${{ needs.check.outputs.tag }}
+        id: apply
         run: |
           set -euo pipefail
           tag='${{ needs.check.outputs.tag }}'
@@ -113,6 +137,8 @@ jobs:
             conflicts=$(git diff --name-only --diff-filter=U || true)
             {
               echo "## Cherry-pick conflict for ${tag}"
+              echo ""
+              echo "Detected by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
               echo ""
               echo "The NoInstall commits no longer apply cleanly onto upstream tag ${tag}."
               echo ""
@@ -214,14 +240,55 @@ jobs:
               echo 'done'
               echo '```'
               echo ""
-              echo "Then re-run this workflow."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+              echo "Then re-run this workflow. The autosync-conflict issue for ${tag}"
+              echo "closes itself once the release applies cleanly."
+            } > "${RUNNER_TEMP}/conflict-report.md"
+            cat "${RUNNER_TEMP}/conflict-report.md" >> "$GITHUB_STEP_SUMMARY"
+            git cherry-pick --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           git push -f origin "noinstall/${tag}"
+      - name: Open or update the conflict issue
+        if: ${{ steps.apply.outputs.conflict == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="autosync: NoInstall commits conflict with ${TAG}"
+          report="${RUNNER_TEMP}/conflict-report.md"
+          number=$(gh issue list -R "${GITHUB_REPOSITORY}" --label autosync-conflict --state open \
+                     --json number,title --jq ".[] | select(.title == \"${title}\") | .number" | head -n 1)
+          if [ -n "${number}" ]; then
+            # Already reported: refresh the body silently rather than notify again.
+            gh issue edit "${number}" -R "${GITHUB_REPOSITORY}" --body-file "${report}"
+            echo "Updated existing issue #${number}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh label create autosync-conflict -R "${GITHUB_REPOSITORY}" --color B60205 \
+              --description "noinstall-autosync cannot apply the feature onto an upstream release" --force
+            { echo "@${GITHUB_REPOSITORY_OWNER}"; echo ""; cat "${report}"; } > "${report}.new"
+            gh issue create -R "${GITHUB_REPOSITORY}" --title "${title}" \
+              --label autosync-conflict --body-file "${report}.new"
+          fi
+      - name: Close the conflict issue for ${{ needs.check.outputs.tag }}
+        if: ${{ steps.apply.outputs.conflict != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -uo pipefail
+          title="autosync: NoInstall commits conflict with ${TAG}"
+          gh issue list -R "${GITHUB_REPOSITORY}" --label autosync-conflict --state open \
+              --json number,title --jq ".[] | select(.title == \"${title}\") | .number" 2>/dev/null |
+            while read -r number; do
+              gh issue close "${number}" -R "${GITHUB_REPOSITORY}" \
+                --comment "Resolved: noinstall/${TAG} applies cleanly; building in ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+            done
 
   macos:
     needs: [check, prepare]
+    if: ${{ needs.prepare.outputs.conflict != 'true' }}
     runs-on: macos-26
     env:
       OS: macos
@@ -250,6 +317,7 @@ jobs:
 
   windows:
     needs: [check, prepare]
+    if: ${{ needs.prepare.outputs.conflict != 'true' }}
     runs-on: windows-latest
     defaults:
       run:
@@ -289,6 +357,7 @@ jobs:
 
   android:
     needs: [check, prepare]
+    if: ${{ needs.prepare.outputs.conflict != 'true' }}
     runs-on: ubuntu-latest
     env:
       OS: android
