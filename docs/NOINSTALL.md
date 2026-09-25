@@ -54,7 +54,7 @@ The **autosync workflow** (`.github/workflows/noinstall-autosync.yml`, runs dail
 + on demand) watches upstream for the newest stable release and newest newer RC.
 For an unprocessed one it: cherry-picks `noinstall/core`'s own commits onto the
 release tag (or reuses a hand-prepared `noinstall/<tag>` branch if it already
-exists), builds macOS/Windows/Android, and publishes a `<tag>-noinstall` release
+exists — see below for how "hand-prepared" is decided), builds macOS/Windows/Android, and publishes a `<tag>-noinstall` release
 with all artifacts — only if every platform build succeeds. It processes one
 release per run and re-dispatches itself if another is pending.
 
@@ -113,7 +113,15 @@ Consequences worth internalising:
   say where to look first. The issue closes itself once the release applies
   cleanly, or once a newer release supersedes it. Issues must be enabled on the
   fork; if they are not, opening the issue fails and the run goes red instead.
-- A **build** failure after a clean cherry-pick still fails the run.
+- A **build** failure after a clean cherry-pick still fails the run. By then
+  the run has already pushed `noinstall/<tag>`. The next run tells that branch
+  apart from a hand-prepared one by committer: if every commit on it past the
+  tag is committed by `github-actions[bot]`, it is the workflow's own and gets
+  rebuilt from the current `noinstall/core`; if any commit carries another
+  committer, it is yours and is reused as-is. So fix the build on
+  `noinstall/core` and re-run the workflow — no branch to delete. When
+  preparing a branch by hand, commit with your own identity (the default), or
+  it will be overwritten.
 
 ---
 

@@ -10,7 +10,9 @@ name: noinstall-autosync
 # labelled autosync-conflict, with the recovery steps - it does not fail, so a
 # stuck release does not produce a red run and a failure email every day. The
 # issue closes itself once the release applies cleanly or a newer release
-# supersedes it.
+# supersedes it. A noinstall/<tag> branch pushed by hand is reused as-is; one
+# an earlier run pushed itself (e.g. before a failed build) is rebuilt from
+# noinstall/core, so a fix pushed there reaches that release.
 
 on:
   schedule:
@@ -102,10 +104,21 @@ jobs:
           git remote add upstream https://github.com/azahar-emu/azahar.git
           git fetch upstream "refs/tags/${tag}:refs/tags/${tag}"
           # A manually prepared (e.g. conflict-resolved) branch takes
-          # precedence and is reused as-is.
+          # precedence and is reused as-is. A branch this workflow pushed
+          # itself (every commit on it committed by the bot) is rebuilt from
+          # noinstall/core instead, so fixes pushed there after a failed build
+          # reach the release.
+          bot_email="41898282+github-actions[bot]@users.noreply.github.com"
           if git ls-remote --exit-code origin "refs/heads/noinstall/${tag}" >/dev/null; then
-            echo "Branch noinstall/${tag} already exists on origin; reusing it."
-            exit 0
+            git fetch origin "refs/heads/noinstall/${tag}:refs/remotes/origin/noinstall/${tag}"
+            manual=$(git log --format='%ce' "refs/tags/${tag}..origin/noinstall/${tag}" | grep -cvxF "${bot_email}" || true)
+            if [ "${manual}" -gt 0 ]; then
+              echo "Branch noinstall/${tag} was prepared by hand (${manual} non-bot commit(s)); reusing it."
+              echo "Reusing hand-prepared branch noinstall/${tag} as-is." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Branch noinstall/${tag} was pushed by an earlier run; rebuilding it from noinstall/core."
+            echo "Rebuilt noinstall/${tag} from noinstall/core (the existing branch was an earlier run's own)." >> "$GITHUB_STEP_SUMMARY"
           fi
           # Only the feature's own commits are applied - merging the whole
           # branch would drag along all of upstream master since the fork
@@ -188,7 +201,9 @@ jobs:
               echo "git push -f origin noinstall/${tag}"
               echo '```'
               echo ""
-              echo "This workflow reuses an existing noinstall/${tag} branch as-is."
+              echo "This workflow reuses a hand-prepared noinstall/${tag} branch as-is."
+              echo "A branch whose commits are all by github-actions[bot] counts as the"
+              echo "workflow's own and gets rebuilt, so commit with your own identity."
               echo ""
               echo "### Required before pushing, either way"
               echo ""
