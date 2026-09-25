@@ -58,6 +58,13 @@ exists — see below for how "hand-prepared" is decided), builds macOS/Windows/A
 with all artifacts — only if every platform build succeeds. It processes one
 release per run and re-dispatches itself if another is pending.
 
+The **build workflow** (`.github/workflows/noinstall-build.yml`) builds
+`noinstall/core` for Windows (MSVC) on every code push to it, and on demand, and
+uploads the packed build as the `noinstall-core-windows-msvc` artifact without
+publishing anything. It is the MSVC gate between upstream releases (upstream's
+`citra-build` is disabled on this fork) and the way to get a Windows build of
+unreleased changes: `gh run download <run-id> -R sayenah/Azahar-NoInstall`.
+
 > The workflow **cherry-picks the feature commits** (`merge-base(master,
 > noinstall/core)..noinstall/core`), it does **not** merge the whole branch —
 > merging would drag all of master's history onto an older tag and conflict.
