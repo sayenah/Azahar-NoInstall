@@ -22,6 +22,7 @@ Stock Azahar (like Citra before it) makes you **install** `.cia` files — DLC, 
 | | Stock Azahar | **Azahar NoInstall** |
 |---|:---:|:---:|
 | Boot a game from a `.zip` | ❌ | ✅ |
+| One-file game + update + DLC (`.bcci`) | ❌ (upstream draft) | ✅ |
 | Boot a `.cia` without installing | ❌ | ✅ |
 | DLC / Updates from a folder | ❌ (must install) | ✅ (drop-in, auto-matched) |
 | Encrypted **and** decrypted dumps | ⚠️ install-only | ✅ everywhere |
@@ -30,11 +31,19 @@ Stock Azahar (like Citra before it) makes you **install** `.cia` files — DLC, 
 
 ### 📦 Run anything, in place
 
-Open a game as a `.zip`, `.cci`, `.cxi`, `.3ds`, or `.cia` — it boots directly. A `.zip` can even bundle the game **and** its update/DLC together as a single self-contained pack.
+Open a game as a `.zip`, `.bcci`, `.cci`, `.cxi`, `.3ds`, or `.cia` — it boots directly. A `.zip` or a **bundle ROM** (`.bcci`) can even carry the game **and** its update/DLC together as a single self-contained file.
+
+A `.bcci` is upstream Azahar's own bundle format ([azahar-emu/azahar#2369](https://github.com/azahar-emu/azahar/pull/2369), not yet in an upstream release): an uncompressed `tar` of one `.cci` plus any number of update/DLC `.cia` files. Nothing inside it is ever extracted. Make one with any tar tool:
+
+```
+tar -cf "Game (USA).bcci" "Game (USA).cci" "Game (USA) (Update).cia" "Game (USA) (DLC).cia"
+```
+
+Already have your updates and DLC installed in Azahar? [`tools/bcci`](tools/bcci/README.md) converts a whole collection into bundles, rebuilding the installed update/DLC as CIAs and verifying every byte.
 
 ### 🗂️ Folder-based DLC, Updates & DSiWare
 
-Set three folders once. Drop your `.cia` files (or `.zip`s containing them) in. When you launch a game, its update and DLC are found automatically — matched by [No-Intro](https://no-intro.org/) filenames and **verified by title ID**, so the wrong content can never attach to the wrong game.
+Set three folders once. Drop your `.cia` files (or `.zip`s / `.bcia` bundles containing them) in. When you launch a game, its update and DLC are found automatically — matched by [No-Intro](https://no-intro.org/) filenames and **verified by title ID**, so the wrong content can never attach to the wrong game.
 
 ```
 Updates/   Zelda OoT 3D (USA) (Update).cia
