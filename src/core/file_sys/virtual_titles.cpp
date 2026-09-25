@@ -30,7 +30,7 @@ constexpr u64 TID_HIGH_DLC = 0x0004008C00000000ULL;
 constexpr u64 TWL_TITLE_ID_FLAG = 0x0000800000000000ULL;
 
 struct Entry {
-    std::string cia_path; // plain or virtual (zip entry) path of the CIA
+    std::string cia_path; // plain or virtual (archive entry) path of the CIA
     std::unique_ptr<CIAContainer> container;
     u16 version = 0;
     // Loadable path per content index, resolved lazily: a virtual byte-range for
@@ -41,15 +41,16 @@ struct Entry {
 std::mutex registry_mutex;
 std::map<u64, Entry> registry;
 
-// A candidate CIA file: either a plain file on disk or an entry inside a zip.
+// A candidate CIA file: either a plain file on disk or an entry inside an
+// archive (zip or bundle ROM).
 struct Candidate {
-    std::string cia_path; // path handed to the virtual path scheme
-    std::string zip_path; // empty for plain files
+    std::string cia_path;     // path handed to the virtual path scheme
+    std::string archive_path; // empty for plain files
     std::string entry_name;
     bool name_matched = false;
 
-    bool InZip() const {
-        return !zip_path.empty();
+    bool InArchive() const {
+        return !archive_path.empty();
     }
 };
 
@@ -65,8 +66,9 @@ bool NameMatches(const std::string& stem, const std::string& base_stem, const ch
 
 std::optional<std::vector<u8>> ReadCandidatePrefix(const Candidate& candidate,
                                                    std::size_t max_bytes) {
-    if (candidate.InZip()) {
-        return FileUtil::ReadZipEntryPrefix(candidate.zip_path, candidate.entry_name, max_bytes);
+    if (candidate.InArchive()) {
+        return FileUtil::ReadArchiveEntryPrefix(candidate.archive_path, candidate.entry_name,
+                                                max_bytes);
     }
     FileUtil::IOFile file(candidate.cia_path, "rb");
     if (!file.IsOpen() || file.GetType().HasCompressedType()) {
@@ -150,24 +152,24 @@ void CollectFolderCandidates(const std::string& folder, const std::string& base_
                 .cia_path = file.physicalName,
                 .name_matched = NameMatches(StemOf(file.virtualName), base_stem, marker),
             });
-        } else if (extension == ".zip") {
-            const auto zip_entries = FileUtil::ListZipContents(file.physicalName);
-            if (!zip_entries) {
+        } else if (FileUtil::IsArchivePath(file.physicalName)) {
+            const auto archive_entries = FileUtil::ListArchiveContents(file.physicalName);
+            if (!archive_entries) {
                 continue;
             }
-            const bool zip_matched = NameMatches(StemOf(file.virtualName), base_stem, marker);
-            for (const auto& zip_entry : zip_entries.value()) {
+            const bool archive_matched = NameMatches(StemOf(file.virtualName), base_stem, marker);
+            for (const auto& archive_entry : archive_entries.value()) {
                 std::string entry_extension;
-                Common::SplitPath(zip_entry.name, nullptr, nullptr, &entry_extension);
+                Common::SplitPath(archive_entry.name, nullptr, nullptr, &entry_extension);
                 if (Common::ToLower(entry_extension) != ".cia") {
                     continue;
                 }
                 candidates.push_back(Candidate{
-                    .cia_path = FileUtil::MakeVirtualPath(file.physicalName, zip_entry.name),
-                    .zip_path = file.physicalName,
-                    .entry_name = zip_entry.name,
-                    .name_matched =
-                        zip_matched || NameMatches(StemOf(zip_entry.name), base_stem, marker),
+                    .cia_path = FileUtil::MakeVirtualPath(file.physicalName, archive_entry.name),
+                    .archive_path = file.physicalName,
+                    .entry_name = archive_entry.name,
+                    .name_matched = archive_matched ||
+                                    NameMatches(StemOf(archive_entry.name), base_stem, marker),
                 });
             }
         }
@@ -215,22 +217,21 @@ void ScanForCompanionTitles(u64 base_title_id, const std::string& base_game_path
     const std::string outer_path = base_game_path.substr(0, base_game_path.find('#'));
     const std::string base_stem = StemOf(outer_path);
 
-    // Sibling .cia entries of the game's own zip act as a self-contained pack.
-    std::string game_zip_extension;
-    Common::SplitPath(outer_path, nullptr, nullptr, &game_zip_extension);
-    if (Common::ToLower(game_zip_extension) == ".zip") {
-        if (const auto zip_entries = FileUtil::ListZipContents(outer_path)) {
+    // Sibling .cia entries of the game's own zip or bundle ROM (.bcci/.bcxi)
+    // act as a self-contained pack.
+    if (FileUtil::IsArchivePath(outer_path)) {
+        if (const auto archive_entries = FileUtil::ListArchiveContents(outer_path)) {
             std::vector<Candidate> pack_candidates;
-            for (const auto& zip_entry : zip_entries.value()) {
+            for (const auto& archive_entry : archive_entries.value()) {
                 std::string entry_extension;
-                Common::SplitPath(zip_entry.name, nullptr, nullptr, &entry_extension);
+                Common::SplitPath(archive_entry.name, nullptr, nullptr, &entry_extension);
                 if (Common::ToLower(entry_extension) != ".cia") {
                     continue;
                 }
                 pack_candidates.push_back(Candidate{
-                    .cia_path = FileUtil::MakeVirtualPath(outer_path, zip_entry.name),
-                    .zip_path = outer_path,
-                    .entry_name = zip_entry.name,
+                    .cia_path = FileUtil::MakeVirtualPath(outer_path, archive_entry.name),
+                    .archive_path = outer_path,
+                    .entry_name = archive_entry.name,
                     .name_matched = true,
                 });
             }

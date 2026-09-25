@@ -4071,8 +4071,9 @@ static bool IsSingleFileDropEvent(const QMimeData* mime) {
     return mime->hasUrls() && mime->urls().length() == 1;
 }
 
-static const std::array<std::string, 13> AcceptedExtensions = {
-    "cci", "cxi", "bin", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx", "3ds", "cia", "zip"};
+static const std::array<std::string, 15> AcceptedExtensions = {
+    "cci",  "cxi",   "bin", "3dsx", "app", "elf",  "axf", "zcci",
+    "zcxi", "z3dsx", "3ds", "cia",  "zip", "bcci", "bcxi"};
 
 static bool IsCorrectFileExtension(const QMimeData* mime) {
     const QString& filename = mime->urls().at(0).toLocalFile();

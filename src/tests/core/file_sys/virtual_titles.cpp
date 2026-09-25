@@ -17,6 +17,7 @@
 #include "core/file_sys/virtual_titles.h"
 #include "core/loader/loader.h"
 #include "miniz.h"
+#include "tests/common/tar_writer.h"
 
 namespace {
 
@@ -237,5 +238,44 @@ TEST_CASE("VirtualTitles companion scan", "[core][file_sys]") {
         std::vector<u8> read_back(content.size());
         REQUIRE(content_file.ReadBytes(read_back.data(), read_back.size()) == read_back.size());
         REQUIRE(read_back == content);
+    }
+
+    SECTION("update and DLC CIAs bundled inside the game's own bundle ROM") {
+        const auto update_content = MakeContent(0x200, 0x12);
+        const auto dlc_content = MakeContent(0x400, 0x34);
+        const std::string bcci = fixture.games_dir + "MyGame (USA).bcci";
+        WriteFile(bcci, TestTar::Build({
+                            {.name = "MyGame (USA).cci", .data = std::vector<u8>(0x100, 0x99)},
+                            {.name = "MyGame (USA) (Update).cia",
+                             .data = BuildTestCia(UPDATE_TID, 9, update_content)},
+                            {.name = "MyGame (USA) (DLC).cia",
+                             .data = BuildTestCia(DLC_TID, 2, dlc_content)},
+                        }));
+
+        FileSys::VirtualTitles::ScanForCompanionTitles(
+            BASE_TID, FileUtil::MakeVirtualPath(bcci, "MyGame (USA).cci"));
+        REQUIRE(FileSys::VirtualTitles::HasTitle(UPDATE_TID));
+        REQUIRE(FileSys::VirtualTitles::HasTitle(DLC_TID));
+
+        for (const auto& [tid, content] :
+             {std::pair{UPDATE_TID, update_content}, std::pair{DLC_TID, dlc_content}}) {
+            const auto content_path = FileSys::VirtualTitles::GetContentPath(tid, 0);
+            REQUIRE(content_path.has_value());
+            // Plaintext content in a bundle is served as a range of the bundle itself.
+            REQUIRE(FileUtil::ResolveVirtualPath(*content_path)->host_path == bcci);
+            FileUtil::IOFile content_file(*content_path, "rb");
+            std::vector<u8> read_back(content.size());
+            REQUIRE(content_file.ReadBytes(read_back.data(), read_back.size()) == read_back.size());
+            REQUIRE(read_back == content);
+        }
+    }
+
+    SECTION(".bcia bundle in the DLC folder") {
+        const auto content = MakeContent(0x300, 0x56);
+        WriteFile(fixture.dlc_dir + "MyGame (USA) (DLC).bcia",
+                  TestTar::Build({{.name = "dlc.cia", .data = BuildTestCia(DLC_TID, 4, content)}}));
+
+        FileSys::VirtualTitles::ScanForCompanionTitles(BASE_TID, game_path);
+        REQUIRE(FileSys::VirtualTitles::HasTitle(DLC_TID));
     }
 }

@@ -6,7 +6,10 @@
 #include <array>
 #include <cstring>
 #include <mutex>
+#include <span>
+#include <string_view>
 #include <fmt/format.h>
+#include "common/alignment.h"
 #include "common/common_paths.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
@@ -20,10 +23,14 @@ namespace {
 constexpr char VIRTUAL_SEP = '#';
 
 // Containers whose inner content may be addressed with the '#' syntax.
-constexpr std::array<std::string_view, 3> CONTAINER_EXTENSIONS = {".zip", ".cia", ".zcia"};
+constexpr std::array<std::string_view, 7> CONTAINER_EXTENSIONS = {".zip",  ".cia",  ".zcia", ".tar",
+                                                                  ".bcci", ".bcxi", ".bcia"};
 
-bool HasContainerExtension(std::string_view segment) {
-    return std::ranges::any_of(CONTAINER_EXTENSIONS, [&](std::string_view ext) {
+// Bundle ROMs (azahar-emu/azahar#2369) are uncompressed tar archives.
+constexpr std::array<std::string_view, 4> TAR_EXTENSIONS = {".tar", ".bcci", ".bcxi", ".bcia"};
+
+bool HasExtension(std::string_view segment, std::span<const std::string_view> extensions) {
+    return std::ranges::any_of(extensions, [&](std::string_view ext) {
         if (segment.size() < ext.size()) {
             return false;
         }
@@ -32,6 +39,191 @@ bool HasContainerExtension(std::string_view segment) {
             return std::tolower(static_cast<unsigned char>(a)) == b;
         });
     });
+}
+
+bool HasContainerExtension(std::string_view segment) {
+    return HasExtension(segment, CONTAINER_EXTENSIONS);
+}
+
+bool IsTarPath(std::string_view path) {
+    return HasExtension(path, TAR_EXTENSIONS);
+}
+
+constexpr u64 TAR_BLOCK_SIZE = 512;
+
+struct TarEntry {
+    std::string name;
+    u64 data_offset = 0;
+    u64 size = 0;
+};
+
+// Parses a tar numeric field: NUL/space-terminated octal, or the GNU base-256
+// form (high bit of the first byte set) used for sizes of 8 GiB and above.
+std::optional<u64> ParseTarNumber(const u8* field, std::size_t length) {
+    if ((field[0] & 0x80) != 0) {
+        u64 value = field[0] & 0x7F;
+        for (std::size_t i = 1; i < length; ++i) {
+            if ((value >> 56) != 0) {
+                return std::nullopt;
+            }
+            value = (value << 8) | field[i];
+        }
+        return value;
+    }
+    u64 value = 0;
+    bool seen_digit = false;
+    for (std::size_t i = 0; i < length; ++i) {
+        const u8 c = field[i];
+        if (c == ' ' || c == '\0') {
+            if (seen_digit) {
+                break;
+            }
+            continue;
+        }
+        if (c < '0' || c > '7' || (value >> 61) != 0) {
+            return std::nullopt;
+        }
+        value = value * 8 + (c - '0');
+        seen_digit = true;
+    }
+    return value;
+}
+
+std::string ParseTarString(const u8* field, std::size_t length) {
+    const char* chars = reinterpret_cast<const char*>(field);
+    return std::string(chars, strnlen(chars, length));
+}
+
+bool IsTarChecksumValid(const std::array<u8, TAR_BLOCK_SIZE>& header) {
+    constexpr std::size_t CHECKSUM_OFFSET = 148;
+    constexpr std::size_t CHECKSUM_SIZE = 8;
+    const auto stored = ParseTarNumber(&header[CHECKSUM_OFFSET], CHECKSUM_SIZE);
+    if (!stored) {
+        return false;
+    }
+    // The checksum is computed with its own field read as spaces. Some old
+    // writers summed signed chars, so accept either interpretation.
+    u64 unsigned_sum = 0;
+    s64 signed_sum = 0;
+    for (std::size_t i = 0; i < header.size(); ++i) {
+        const bool in_field = i >= CHECKSUM_OFFSET && i < CHECKSUM_OFFSET + CHECKSUM_SIZE;
+        const u8 byte = in_field ? static_cast<u8>(' ') : header[i];
+        unsigned_sum += byte;
+        signed_sum += static_cast<s8>(byte);
+    }
+    return *stored == unsigned_sum || static_cast<s64>(*stored) == signed_sum;
+}
+
+// Returns the value of the "path" record of a pax extended header, if any.
+// Records have the form "<length> <key>=<value>\n".
+std::optional<std::string> ParsePaxPath(const std::vector<u8>& data) {
+    std::size_t pos = 0;
+    while (pos < data.size()) {
+        std::size_t space = pos;
+        std::size_t record_length = 0;
+        while (space < data.size() && data[space] >= '0' && data[space] <= '9') {
+            record_length = record_length * 10 + (data[space] - '0');
+            ++space;
+        }
+        if (space >= data.size() || data[space] != ' ' || record_length == 0 ||
+            record_length > data.size() - pos) {
+            return std::nullopt;
+        }
+        const std::string_view record(reinterpret_cast<const char*>(data.data()) + space + 1,
+                                      record_length - (space + 1 - pos));
+        if (record.starts_with("path=") && record.ends_with('\n')) {
+            return std::string(record.substr(5, record.size() - 6));
+        }
+        pos += record_length;
+    }
+    return std::nullopt;
+}
+
+// Walks the headers of a tar archive and returns its regular file entries.
+std::optional<std::vector<TarEntry>> ReadTarEntries(const std::string& tar_path) {
+    // GNU long-name and pax headers carry a few hundred bytes at most; anything
+    // bigger means a corrupt archive rather than a real name.
+    constexpr u64 MAX_EXTENDED_HEADER_SIZE = 0x10000;
+
+    IOFile file(tar_path, "rb");
+    if (!file.IsOpen()) {
+        return std::nullopt;
+    }
+    const u64 file_size = file.GetSize();
+
+    std::vector<TarEntry> entries;
+    std::optional<std::string> next_name; // from a preceding GNU 'L' or pax 'x' header
+    u64 offset = 0;
+    while (offset + TAR_BLOCK_SIZE <= file_size) {
+        std::array<u8, TAR_BLOCK_SIZE> header;
+        if (file.ReadAtBytes(header.data(), header.size(), offset) != header.size()) {
+            return std::nullopt;
+        }
+        if (std::ranges::all_of(header, [](u8 b) { return b == 0; })) {
+            break; // end-of-archive marker
+        }
+        if (!IsTarChecksumValid(header)) {
+            LOG_ERROR(Common_Filesystem, "Bad tar header at offset 0x{:x} in {}", offset, tar_path);
+            return std::nullopt;
+        }
+        const auto size = ParseTarNumber(&header[124], 12);
+        const u64 data_offset = offset + TAR_BLOCK_SIZE;
+        if (!size || *size > file_size - data_offset) {
+            LOG_ERROR(Common_Filesystem, "Truncated tar entry at offset 0x{:x} in {}", offset,
+                      tar_path);
+            return std::nullopt;
+        }
+
+        const char type = static_cast<char>(header[156]);
+        if (type == 'L' || type == 'x') {
+            if (*size > MAX_EXTENDED_HEADER_SIZE) {
+                return std::nullopt;
+            }
+            std::vector<u8> data(static_cast<std::size_t>(*size));
+            if (file.ReadAtBytes(data.data(), data.size(), data_offset) != data.size()) {
+                return std::nullopt;
+            }
+            if (type == 'L') {
+                next_name = ParseTarString(data.data(), data.size());
+            } else if (auto pax_path = ParsePaxPath(data)) {
+                next_name = std::move(pax_path);
+            }
+        } else if (type == '0' || type == '\0' || type == '7') {
+            std::string name;
+            if (next_name) {
+                name = std::move(*next_name);
+            } else {
+                name = ParseTarString(&header[0], 100);
+                const bool is_ustar = std::memcmp(&header[257], "ustar", 5) == 0;
+                const std::string prefix = is_ustar ? ParseTarString(&header[345], 155) : "";
+                if (!prefix.empty()) {
+                    name = prefix + "/" + name;
+                }
+            }
+            if (name.starts_with("./")) {
+                name.erase(0, 2);
+            }
+            entries.push_back(TarEntry{std::move(name), data_offset, *size});
+            next_name.reset();
+        } else {
+            // Directories, links and global pax headers carry no file data we use.
+            next_name.reset();
+        }
+        offset = data_offset + Common::AlignUp(*size, TAR_BLOCK_SIZE);
+    }
+    return entries;
+}
+
+std::optional<TarEntry> FindTarEntry(const std::string& tar_path, const std::string& name) {
+    const auto entries = ReadTarEntries(tar_path);
+    if (!entries) {
+        return std::nullopt;
+    }
+    const auto it = std::ranges::find(*entries, name, &TarEntry::name);
+    if (it == entries->end()) {
+        return std::nullopt;
+    }
+    return *it;
 }
 
 std::vector<std::string> SplitSegments(const std::string& path) {
@@ -211,11 +403,22 @@ std::optional<VirtualRange> ResolveVirtualPath(const std::string& path) {
             continue;
         }
 
-        // A zip entry segment is only meaningful when the current range is a
-        // whole zip file, not a sub-range of some other container.
+        // An archive entry segment is only meaningful when the current range
+        // is a whole archive file, not a sub-range of some other container.
         if (range.offset != 0) {
-            LOG_ERROR(Common_Filesystem, "Nested zip archives are not supported: {}", path);
+            LOG_ERROR(Common_Filesystem, "Nested archives are not supported: {}", path);
             return std::nullopt;
+        }
+        if (IsTarPath(range.host_path)) {
+            const auto entry = FindTarEntry(range.host_path, segment);
+            if (!entry) {
+                LOG_ERROR(Common_Filesystem, "Entry '{}' not found in {}", segment,
+                          range.host_path);
+                return std::nullopt;
+            }
+            range.offset = entry->data_offset;
+            range.size = entry->size;
+            continue;
         }
         ZipReader zip(range.host_path);
         if (!zip.IsOpen()) {
@@ -248,12 +451,19 @@ std::optional<VirtualRange> ResolveVirtualPath(const std::string& path) {
     return range;
 }
 
-std::optional<std::vector<ZipEntryInfo>> ListZipContents(const std::string& zip_path) {
+bool IsArchivePath(const std::string& path) {
+    if (IsVirtualPath(path)) {
+        return false;
+    }
+    return IsTarPath(path) || HasExtension(path, std::array<std::string_view, 1>{".zip"});
+}
+
+std::optional<std::vector<ArchiveEntryInfo>> ListZipContents(const std::string& zip_path) {
     ZipReader zip(zip_path);
     if (!zip.IsOpen()) {
         return std::nullopt;
     }
-    std::vector<ZipEntryInfo> entries;
+    std::vector<ArchiveEntryInfo> entries;
     const mz_uint count = mz_zip_reader_get_num_files(&zip.archive);
     for (mz_uint i = 0; i < count; ++i) {
         mz_zip_archive_file_stat stat;
@@ -263,13 +473,34 @@ std::optional<std::vector<ZipEntryInfo>> ListZipContents(const std::string& zip_
         if (mz_zip_reader_is_file_a_directory(&zip.archive, i)) {
             continue;
         }
-        entries.push_back(ZipEntryInfo{
+        entries.push_back(ArchiveEntryInfo{
             .name = stat.m_filename,
             .uncompressed_size = stat.m_uncomp_size,
             .stored = stat.m_method == 0,
         });
     }
     return entries;
+}
+
+std::optional<std::vector<ArchiveEntryInfo>> ListTarContents(const std::string& tar_path) {
+    const auto tar_entries = ReadTarEntries(tar_path);
+    if (!tar_entries) {
+        return std::nullopt;
+    }
+    std::vector<ArchiveEntryInfo> entries;
+    entries.reserve(tar_entries->size());
+    for (const auto& entry : *tar_entries) {
+        entries.push_back(ArchiveEntryInfo{
+            .name = entry.name,
+            .uncompressed_size = entry.size,
+            .stored = true,
+        });
+    }
+    return entries;
+}
+
+std::optional<std::vector<ArchiveEntryInfo>> ListArchiveContents(const std::string& archive_path) {
+    return IsTarPath(archive_path) ? ListTarContents(archive_path) : ListZipContents(archive_path);
 }
 
 void ClearExtractionCache() {
@@ -314,6 +545,27 @@ std::optional<std::vector<u8>> ReadZipEntryPrefix(const std::string& zip_path,
     }
     mz_zip_reader_extract_iter_free(iter);
     if (read != to_read) {
+        return std::nullopt;
+    }
+    return buffer;
+}
+
+std::optional<std::vector<u8>> ReadArchiveEntryPrefix(const std::string& archive_path,
+                                                      const std::string& entry_name,
+                                                      std::size_t max_bytes) {
+    if (!IsTarPath(archive_path)) {
+        return ReadZipEntryPrefix(archive_path, entry_name, max_bytes);
+    }
+    const auto entry = FindTarEntry(archive_path, entry_name);
+    if (!entry) {
+        return std::nullopt;
+    }
+    IOFile file(archive_path, "rb");
+    if (!file.IsOpen()) {
+        return std::nullopt;
+    }
+    std::vector<u8> buffer(static_cast<std::size_t>(std::min<u64>(max_bytes, entry->size)));
+    if (file.ReadAtBytes(buffer.data(), buffer.size(), entry->data_offset) != buffer.size()) {
         return std::nullopt;
     }
     return buffer;

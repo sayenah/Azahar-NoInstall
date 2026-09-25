@@ -2,6 +2,7 @@ add_executable(tests
     common/bit_field.cpp
     common/file_util.cpp
     common/param_package.cpp
+    common/tar_writer.h
     common/virtual_container.cpp
     core/core_timing.cpp
     core/file_sys/path_parser.cpp

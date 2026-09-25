@@ -152,24 +152,15 @@ static std::unique_ptr<AppLoader> GetFileLoader(Core::System& system, FileUtil::
     }
 }
 
-static bool IsZipPath(const std::string& path) {
-    if (FileUtil::IsVirtualPath(path)) {
-        return false;
-    }
-    std::string extension;
-    Common::SplitPath(path, nullptr, nullptr, &extension);
-    return Common::ToLower(extension) == ".zip";
-}
-
-static std::optional<std::string> FindBootableZipEntry(const std::string& zip_path) {
-    const auto entries = FileUtil::ListZipContents(zip_path);
+static std::optional<std::string> FindBootableArchiveEntry(const std::string& archive_path) {
+    const auto entries = FileUtil::ListArchiveContents(archive_path);
     if (!entries) {
-        LOG_ERROR(Loader, "Not a readable zip archive: {}", zip_path);
+        LOG_ERROR(Loader, "Not a readable archive: {}", archive_path);
         return std::nullopt;
     }
 
     // Lower is better; ties keep listing order. Full games are preferred over
-    // homebrew formats when a zip contains several bootable files.
+    // homebrew formats when an archive contains several bootable files.
     const auto priority = [](FileType type) -> int {
         switch (type) {
         case FileType::CCI:
@@ -203,7 +194,7 @@ static std::optional<std::string> FindBootableZipEntry(const std::string& zip_pa
         }
     }
     if (!best) {
-        LOG_ERROR(Loader, "No bootable file found inside {}", zip_path);
+        LOG_ERROR(Loader, "No bootable file found inside {}", archive_path);
     }
     return best;
 }
@@ -274,10 +265,11 @@ std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
                              filename, "");
     }
 
-    // A zip archive boots the best bootable entry it contains, in place.
+    // A zip or bundle ROM (.bcci/.bcxi) boots the best bootable entry it
+    // contains, in place.
     std::string load_path = filename;
-    if (IsZipPath(load_path)) {
-        const auto entry = FindBootableZipEntry(load_path);
+    if (FileUtil::IsArchivePath(load_path)) {
+        const auto entry = FindBootableArchiveEntry(load_path);
         if (!entry) {
             return nullptr;
         }

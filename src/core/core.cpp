@@ -323,7 +323,7 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
     app_loader->ReadProgramId(program_id);
 
     // Register update/DLC CIAs from the content folders (or the game's own
-    // zip) so they are served in place without installation.
+    // zip or bundle ROM) so they are served in place without installation.
     FileSys::VirtualTitles::ScanForCompanionTitles(program_id, filepath);
 
     if (restore_plugin_context.has_value() && restore_plugin_context->is_enabled &&

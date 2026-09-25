@@ -10,6 +10,7 @@
 #include "common/file_util.h"
 #include "common/virtual_container.h"
 #include "miniz.h"
+#include "tests/common/tar_writer.h"
 
 namespace {
 
@@ -133,4 +134,105 @@ TEST_CASE("VirtualContainer zip entries", "[common]") {
         const u8 byte = 0xAA;
         REQUIRE(read_file.WriteBytes(&byte, 1) != 1);
     }
+}
+
+TEST_CASE("VirtualContainer tar bundles", "[common]") {
+    const std::string dir = "./vc_tar_test_tmp/";
+    FileUtil::CreateFullPath(dir);
+    const auto pattern = MakePattern(0x40000);
+    const std::string long_name = std::string(120, 'L') + ".cia";
+    const std::string pax_name = std::string(130, 'P') + ".cia";
+
+    const auto tar = TestTar::Build({
+        {.name = "sub", .type = '5'},
+        {.name = "Game (USA).cci", .data = pattern},
+        {.name = "././@LongLink", .data = TestTar::ToBytes(long_name + '\0'), .type = 'L'},
+        {.name = long_name.substr(0, 100), .data = std::vector<u8>(0x20, 0xAB)},
+        {.name = "PaxHeaders/x",
+         .data = TestTar::ToBytes(TestTar::PaxRecord("path", pax_name)),
+         .type = 'x'},
+        {.name = "truncated-pax-name", .data = std::vector<u8>(0x30, 0xCD)},
+        {.name = "./dotted.bin", .data = std::vector<u8>(1, 0xEF)},
+    });
+    const std::string bcci_path = dir + "Game (USA).bcci";
+    {
+        FileUtil::IOFile file(bcci_path, "wb");
+        REQUIRE(file.WriteBytes(tar.data(), tar.size()) == tar.size());
+    }
+
+    SECTION("path detection") {
+        REQUIRE(FileUtil::IsArchivePath(bcci_path));
+        REQUIRE(FileUtil::IsArchivePath(dir + "x.BCXI"));
+        REQUIRE(FileUtil::IsArchivePath(dir + "x.bcia"));
+        REQUIRE(FileUtil::IsArchivePath(dir + "x.zip"));
+        REQUIRE_FALSE(FileUtil::IsArchivePath(dir + "x.cci"));
+        REQUIRE_FALSE(FileUtil::IsArchivePath(bcci_path + "#Game (USA).cci"));
+        REQUIRE(FileUtil::IsVirtualPath(bcci_path + "#Game (USA).cci"));
+    }
+
+    SECTION("listing skips directories and applies long names") {
+        const auto entries = FileUtil::ListArchiveContents(bcci_path);
+        REQUIRE(entries.has_value());
+        REQUIRE(entries->size() == 4);
+        REQUIRE((*entries)[0].name == "Game (USA).cci");
+        REQUIRE((*entries)[0].uncompressed_size == pattern.size());
+        REQUIRE((*entries)[0].stored);
+        REQUIRE((*entries)[1].name == long_name);
+        REQUIRE((*entries)[2].name == pax_name);
+        REQUIRE((*entries)[3].name == "dotted.bin");
+    }
+
+    SECTION("entries resolve to ranges of the bundle itself") {
+        const auto range =
+            FileUtil::ResolveVirtualPath(FileUtil::MakeVirtualPath(bcci_path, "Game (USA).cci"));
+        REQUIRE(range.has_value());
+        REQUIRE(range->host_path == bcci_path);
+        REQUIRE(range->offset == 1024); // after the directory header and its own header
+        REQUIRE(range->size == pattern.size());
+        CheckEntryReads(bcci_path + "#Game (USA).cci", pattern);
+
+        FileUtil::IOFile long_file(bcci_path + "#" + long_name, "rb");
+        REQUIRE(long_file.IsOpen());
+        REQUIRE(long_file.GetSize() == 0x20);
+        FileUtil::IOFile pax_file(bcci_path + "#" + pax_name, "rb");
+        REQUIRE(pax_file.IsOpen());
+        REQUIRE(pax_file.GetSize() == 0x30);
+        u8 byte = 0;
+        REQUIRE(pax_file.ReadBytes(&byte, 1) == 1);
+        REQUIRE(byte == 0xCD);
+    }
+
+    SECTION("entry prefixes stream without extraction") {
+        const auto prefix = FileUtil::ReadArchiveEntryPrefix(bcci_path, "Game (USA).cci", 0x100);
+        REQUIRE(prefix.has_value());
+        REQUIRE(std::equal(prefix->begin(), prefix->end(), pattern.begin()));
+        REQUIRE_FALSE(FileUtil::ReadArchiveEntryPrefix(bcci_path, "missing.cia", 0x10));
+    }
+
+    SECTION("range segments inside a tar entry") {
+        const std::string range_path = bcci_path + "#Game (USA).cci#0x1200:0x800";
+        REQUIRE(FileUtil::GetSize(range_path) == 0x800);
+        REQUIRE_FALSE(FileUtil::Exists(bcci_path + "#Game (USA).cci#0x3f000:0x2000"));
+    }
+
+    SECTION("corrupt or truncated archives are rejected") {
+        auto corrupt = tar;
+        corrupt[0] ^= 0xFF; // breaks the first header's checksum
+        const std::string corrupt_path = dir + "corrupt.bcci";
+        {
+            FileUtil::IOFile file(corrupt_path, "wb");
+            REQUIRE(file.WriteBytes(corrupt.data(), corrupt.size()) == corrupt.size());
+        }
+        REQUIRE_FALSE(FileUtil::ListArchiveContents(corrupt_path).has_value());
+
+        const std::string truncated_path = dir + "truncated.bcci";
+        {
+            FileUtil::IOFile file(truncated_path, "wb");
+            REQUIRE(file.WriteBytes(tar.data(), 0x2000) == 0x2000);
+        }
+        REQUIRE_FALSE(FileUtil::ListArchiveContents(truncated_path).has_value());
+        REQUIRE_FALSE(FileUtil::Exists(truncated_path + "#Game (USA).cci"));
+    }
+
+    FileUtil::DeleteDirRecursively(dir);
 }

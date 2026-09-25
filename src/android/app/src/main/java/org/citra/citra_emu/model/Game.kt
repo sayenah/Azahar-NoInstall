@@ -99,7 +99,7 @@ class Game(
         val extensions: Set<String> = HashSet(
             listOf(
                 "3dsx", "app", "axf", "cci", "cxi", "elf", "z3dsx", "zcci", "zcxi", "3ds", "cia",
-                "zip"
+                "zip", "bcci", "bcxi"
             )
         )
     }

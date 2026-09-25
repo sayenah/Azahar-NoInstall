@@ -16,9 +16,12 @@ namespace FileUtil {
 //   "Game.zip#Game.3ds"            -> the entry "Game.3ds" inside Game.zip
 //   "Update.cia#0x2940:0x1000"     -> 0x1000 bytes at offset 0x2940 of Update.cia
 //   "Pack.zip#Update.cia#0x40:0x8" -> a range within a zip entry
+//   "Game.bcci#Game (DLC).cia"     -> an entry inside a bundle (tar) archive
 // Zip entries that are stored (uncompressed) resolve to a byte range of the zip
 // file itself; compressed entries are transparently extracted once into the
-// cache directory and resolve to the extracted copy.
+// cache directory and resolve to the extracted copy. Bundle ROMs (.bcci, .bcxi,
+// .bcia; see azahar-emu/azahar#2369) are plain uncompressed tar archives, so
+// their entries always resolve to a byte range of the bundle itself.
 
 /// Returns true if the path uses the '#' virtual container syntax.
 bool IsVirtualPath(const std::string& path);
@@ -35,7 +38,11 @@ struct VirtualRange {
 /// Returns std::nullopt if any segment cannot be resolved.
 std::optional<VirtualRange> ResolveVirtualPath(const std::string& path);
 
-struct ZipEntryInfo {
+/// Returns true if the (non-virtual) path names an archive whose entries can be
+/// listed and addressed: a zip, or a tar-based bundle ROM.
+bool IsArchivePath(const std::string& path);
+
+struct ArchiveEntryInfo {
     std::string name;
     u64 uncompressed_size = 0;
     bool stored = false;
@@ -43,13 +50,27 @@ struct ZipEntryInfo {
 
 /// Lists the file entries of a zip archive (directories are skipped).
 /// Returns std::nullopt if the file is not a readable zip archive.
-std::optional<std::vector<ZipEntryInfo>> ListZipContents(const std::string& zip_path);
+std::optional<std::vector<ArchiveEntryInfo>> ListZipContents(const std::string& zip_path);
+
+/// Lists the regular file entries of a tar archive. Understands ustar plus the
+/// GNU and pax long-name extensions. Returns std::nullopt if the file is not a
+/// well-formed tar archive.
+std::optional<std::vector<ArchiveEntryInfo>> ListTarContents(const std::string& tar_path);
+
+/// Lists the file entries of any archive IsArchivePath accepts.
+std::optional<std::vector<ArchiveEntryInfo>> ListArchiveContents(const std::string& archive_path);
 
 /// Reads up to max_bytes from the start of a zip entry by streaming, without
 /// extracting the entry to the cache. Returns std::nullopt on failure.
 std::optional<std::vector<u8>> ReadZipEntryPrefix(const std::string& zip_path,
                                                   const std::string& entry_name,
                                                   std::size_t max_bytes);
+
+/// Reads up to max_bytes from the start of an entry of any archive
+/// IsArchivePath accepts, without extracting it to the cache.
+std::optional<std::vector<u8>> ReadArchiveEntryPrefix(const std::string& archive_path,
+                                                      const std::string& entry_name,
+                                                      std::size_t max_bytes);
 
 /// Deletes every file extracted from compressed zip entries. Safe to call
 /// whenever no emulation session is running; entries are re-extracted on

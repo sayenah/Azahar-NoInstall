@@ -7,7 +7,7 @@ picking this up cold, read this first — it is written to get you productive
 without re-deriving the design.
 
 > **Scope.** NoInstall = "run games, DLC, updates and DSiWare directly from
-> `.zip`/`.cci`/`.cxi`/`.3ds`/`.cia` files without installing anything into the
+> `.zip`/`.bcci`/`.cci`/`.cxi`/`.3ds`/`.cia` files without installing anything into the
 > emulated console, decrypting encrypted content on the fly." Nothing here
 > changes the actual 3DS emulation; it all sits at the file-access and loader
 > layers.
@@ -23,9 +23,9 @@ to the user's own files in place instead of to installed copies**, decrypting
 transparently when needed. Three layers do this:
 
 1. **Virtual container paths** — a path syntax + `IOFile` support that lets any
-   existing reader address a byte-range inside a `.zip` or `.cia` as if it were
+   existing reader address a byte-range inside a `.zip`, bundle ROM or `.cia` as if it were
    a standalone file.
-2. **The loader** — boots a `.zip`/`.cia`/encrypted ROM in place by resolving it
+2. **The loader** — boots a `.zip`/`.bcci`/`.cia`/encrypted ROM in place by resolving it
    to a virtual path (or a decrypted cache file) and handing that to the normal
    NCCH loader.
 3. **The virtual title registry** — at game boot, finds the matching update/DLC
@@ -135,6 +135,7 @@ A read-only path scheme addressing content inside another file, separated by `#`
 Game.zip#Game.3ds                 → the entry "Game.3ds" inside Game.zip
 Update.cia#0x2940:0x1000          → 0x1000 bytes at offset 0x2940 of Update.cia
 Pack.zip#Update.cia#0x40:0x8      → a byte range within a zip entry
+Game.bcci#Game (DLC).cia          → an entry inside a bundle ROM (tar)
 ```
 
 - Resolution happens inside `FileUtil::IOFile` (`src/common/file_util.cpp`):
@@ -147,38 +148,56 @@ Pack.zip#Update.cia#0x40:0x8      → a byte range within a zip entry
   `<CacheDir>/extracted/` (cache key = CRC32 + size + name) and resolved to the
   extracted copy.
 - Zip reading is provided by **miniz** (`externals/miniz/`, vendored, MIT).
+- **Bundle ROMs** (`.bcci`/`.bcxi`/`.bcia`, and plain `.tar`) are uncompressed
+  tar archives — upstream's format from
+  [azahar-emu/azahar#2369](https://github.com/azahar-emu/azahar/pull/2369),
+  still a draft there. A small built-in reader (`ReadTarEntries`) walks the
+  512-byte headers (ustar, plus GNU `L` and pax `path` long names, checksums
+  verified); every entry resolves to a byte range of the bundle itself, so
+  nothing is ever extracted. Nested archives are not supported.
+- **When upstream merges #2369**, it brings its own bundle handling (microtar,
+  a tar-aware `IOFile`, and bundled CIAs registered in `am.cpp`) that overlaps
+  this one in `loader.cpp`, `am.cpp`, `core.cpp`, `game_list.cpp` and
+  `Game.kt`, so expect an autosync conflict. The file format is the same, so
+  existing `.bcci` files keep working whichever side is kept. Keep a single
+  code path for bundles; don't run both. Upstream's draft only reads plain
+  ustar names (≤100 bytes, no GNU/pax extensions), so tools that make bundles
+  should stick to that too.
 - `ClearExtractionCache()` wipes `<CacheDir>/extracted/` (which also contains the
   decrypted cache, see §3.4). Called on desktop exit
   (`GMainWindow::closeEvent`) and Android startup (`setUserDirectory` JNI).
 
-Key public API: `IsVirtualPath`, `ResolveVirtualPath`, `ListZipContents`,
-`ReadZipEntryPrefix`, `MakeVirtualPath`, `MakeVirtualRangePath`,
-`ClearExtractionCache`.
+Key public API: `IsVirtualPath`, `ResolveVirtualPath`, `IsArchivePath`,
+`ListArchiveContents` (zip or tar), `ReadArchiveEntryPrefix`, `MakeVirtualPath`,
+`MakeVirtualRangePath`, `ClearExtractionCache`.
 
 ### 3.2 Loader — `src/core/loader/loader.cpp`
 
 `GetLoader()` is the entry point. NoInstall additions:
 
-- **`.zip`** → `FindBootableZipEntry()` picks the best bootable entry
-  (CCI > CXI > CIA > 3DSX > ELF), rewrites the load path to `zip#entry`.
+- **`.zip`/`.bcci`/`.bcxi`** → `FindBootableArchiveEntry()` picks the best
+  bootable entry (CCI > CXI > CIA > 3DSX > ELF), rewrites the load path to
+  `archive#entry`.
 - **`.cia`** → `GetCIADirectLoader()` boots the CIA's main content in place via
   `Service::AM::PrepareCIAContentForLoad()` (→ virtual range or decrypted cache).
 - **`.cxi`/`.cci`/`.3ds`** → if encrypted, `Service::AM::PrepareEncryptedRomForLoad()`
   decrypts to cache and the loader loads that; plaintext ROMs load unchanged.
 
 Game-list extensions: `src/citra_qt/game_list.cpp` (`supported_file_extensions`)
-adds `cia`, `zip`. Drag-and-drop whitelist in `citra_qt.cpp` (`AcceptedExtensions`).
+adds `cia`, `zip`, `bcci`, `bcxi`. Drag-and-drop whitelist in `citra_qt.cpp`
+(`AcceptedExtensions`). `.bcia` (a bundle of CIAs only) is not listed as a game,
+matching upstream; it is picked up from the content folders instead.
 
 ### 3.3 Virtual title registry — `src/core/file_sys/virtual_titles.{h,cpp}`
 
 Populated in `Core::System::Load()` (`src/core/core.cpp`) via
 `ScanForCompanionTitles(program_id, filepath)`; cleared in `System::Shutdown`.
 
-- Scans the configured **Updates** and **DLC** folders for `.cia` (or `.zip`s of
-  them) whose title ID is the booted game's update/DLC title ID
+- Scans the configured **Updates** and **DLC** folders for `.cia` (or `.zip`s /
+  bundle ROMs of them) whose title ID is the booted game's update/DLC title ID
   (`0004000E<low>` / `0004008C<low>`). No-Intro `(Update)`/`(DLC)` filename
   matches are tried first; otherwise every candidate is probed. Also registers
-  CIAs bundled inside the game's own `.zip`, and every DSiWare CIA in the
+  CIAs bundled inside the game's own `.zip` or `.bcci`/`.bcxi`, and every DSiWare CIA in the
   **DSiWare** folder (manage-only — see §5).
 - Candidate probing streams only the CIA header + TMD (no full extraction).
 - **The choke point:** `Service::AM::GetTitleContentPath()` (am.cpp ~1280) and
@@ -239,7 +258,7 @@ declared once in `CMakeModules/GenerateSettingKeys.cmake` (shared list) and in
   native path via `NativeLibrary.getNativePath`; read in `jni/config.cpp`;
   **declared in `jni/default_ini.h`** (required — the Android startup asserts
   that every shared setting key is either in the default ini or the omitted-keys
-  list). `Game.kt` lists `.zip`/`.cia`. See §5 for the Google Play limitation.
+  list). `Game.kt` lists `.zip`/`.bcci`/`.bcxi`/`.cia`. See §5 for the Google Play limitation.
 
 ---
 
@@ -255,14 +274,15 @@ cmake ../.. -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 ninja
 ./bin/RelWithDebInfo/tests            # all suites
-./bin/RelWithDebInfo/tests "VirtualContainer zip entries,VirtualTitles companion scan"
+./bin/RelWithDebInfo/tests "VirtualContainer zip entries,VirtualContainer tar bundles,VirtualTitles companion scan"
 ```
 
 Unit tests for the feature:
-`src/tests/common/virtual_container.cpp` (zip layer, byte ranges) and
+`src/tests/common/virtual_container.cpp` (zip and tar layers, byte ranges,
+long names, corrupt/truncated archives) and
 `src/tests/core/file_sys/virtual_titles.cpp` (registry, No-Intro matching,
-title-ID probing, zipped/deflated CIAs, version preference). Both build synthetic
-CIAs with miniz — they cannot exercise real decryption (needs real keys + real
+title-ID probing, zipped/deflated CIAs, bundle ROMs, version preference). Both
+build synthetic CIAs with miniz or `src/tests/common/tar_writer.h` — they cannot exercise real decryption (needs real keys + real
 NCCH), so decryption is verified manually against real files.
 
 Run `clang-format -i` on any `.cpp/.h` you touch — CI enforces it, and MSVC
@@ -346,7 +366,7 @@ Windows build even when macOS/Linux pass.
 
 | Area | Files |
 |---|---|
-| Zip / virtual paths | `src/common/virtual_container.{h,cpp}`, `src/common/file_util.{h,cpp}`, `externals/miniz/` |
+| Zip / tar / virtual paths | `src/common/virtual_container.{h,cpp}`, `src/common/file_util.{h,cpp}`, `externals/miniz/` |
 | Loader | `src/core/loader/loader.cpp` |
 | Registry | `src/core/file_sys/virtual_titles.{h,cpp}`, `src/core/core.cpp` |
 | Decryption | `src/core/hle/service/am/am.{h,cpp}` |
@@ -354,5 +374,6 @@ Windows build even when macOS/Linux pass.
 | Settings | `CMakeModules/GenerateSettingKeys.cmake`, `src/common/settings.h` |
 | Desktop UI | `src/citra_qt/configuration/config.cpp`, `configure_storage.{ui,cpp}`, `citra_qt.cpp`, `game_list.cpp` |
 | Android | `model/Game.kt`, `SettingKeys.kt`, `StringSetting.kt`, `Settings.kt`, `HomeSettingsFragment.kt`, `jni/config.cpp`, `jni/default_ini.h`, `jni/native.cpp`, `res/values/strings.xml` |
-| Tests | `src/tests/common/virtual_container.cpp`, `src/tests/core/file_sys/virtual_titles.cpp` |
+| Tests | `src/tests/common/virtual_container.cpp`, `src/tests/common/tar_writer.h`, `src/tests/core/file_sys/virtual_titles.cpp` |
 | CI | `.github/workflows/noinstall-autosync.yml` |
+| Bundle builder | `tools/bcci/` (Python: `make_bcci.py` turns a collection + installed update/DLC into `.bcci` files, `verify_bcci.py` checks them) |

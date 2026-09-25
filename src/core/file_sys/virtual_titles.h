@@ -20,9 +20,10 @@ void Clear();
  * (Service::AM::GetTitleContentPath / GetTitleMetadataPath) resolve into the
  * CIA files in place, with no installation.
  *
- * Candidates come from the configured Updates/DLC folders (plain .cia files or
- * zip archives containing them) and, when the game itself was booted from a
- * zip, from sibling .cia entries of that same archive. File names following
+ * Candidates come from the configured Updates/DLC folders (plain .cia files, or
+ * zip archives or bundle ROMs containing them) and, when the game itself was
+ * booted from a zip or bundle ROM (.bcci/.bcxi), from sibling .cia entries of
+ * that same archive. File names following
  * the No-Intro "(Update)"/"(DLC)" convention are tried first; if nothing
  * matches, every candidate in the folder is probed. Matches are always
  * verified by title ID, never by name alone.
