@@ -316,6 +316,7 @@ std::optional<std::string> GetContentPath(u64 title_id, std::size_t index) {
     if (!resolved) {
         return std::nullopt;
     }
+    LOG_INFO(Service_AM, "Reading title {:016x} content {} from {}", title_id, index, *resolved);
     entry.resolved_content_paths.emplace(index, *resolved);
     return resolved;
 }
