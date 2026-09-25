@@ -383,4 +383,4 @@ Windows build even when macOS/Linux pass.
 | Android | `model/Game.kt`, `SettingKeys.kt`, `StringSetting.kt`, `Settings.kt`, `HomeSettingsFragment.kt`, `jni/config.cpp`, `jni/default_ini.h`, `jni/native.cpp`, `res/values/strings.xml` |
 | Tests | `src/tests/common/virtual_container.cpp`, `src/tests/common/tar_writer.h`, `src/tests/core/file_sys/virtual_titles.cpp` |
 | CI | `.github/workflows/noinstall-autosync.yml` |
-| Bundle builder | `tools/bcci/` (Python: `make_bcci.py` turns a collection + installed update/DLC into `.bcci` files, `verify_bcci.py` checks them) |
+| Bundle builder | `tools/bcci/` (Python: `make_bcci.py` bundles each game image with its update/DLC CIAs, matched by title ID, into a `.bcci`; `verify_bcci.py` checks bundles) |

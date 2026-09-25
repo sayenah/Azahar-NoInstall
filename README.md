@@ -39,7 +39,7 @@ A `.bcci` is upstream Azahar's own bundle format ([azahar-emu/azahar#2369](https
 tar -cf "Game (USA).bcci" "Game (USA).cci" "Game (USA) (Update).cia" "Game (USA) (DLC).cia"
 ```
 
-Already have your updates and DLC installed in Azahar? [`tools/bcci`](tools/bcci/README.md) converts a whole collection into bundles, rebuilding the installed update/DLC as CIAs and verifying every byte.
+To convert a whole collection, [`tools/bcci`](tools/bcci/README.md) matches every update/DLC CIA to its game by title ID and writes one verified `.bcci` per game.
 
 ### 🗂️ Folder-based DLC, Updates & DSiWare
 
